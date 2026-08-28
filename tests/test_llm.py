@@ -9,7 +9,7 @@ from naiauto.core.prompt.errors import (
     CompilerServerError,
     CompilerTimeoutError,
 )
-from naiauto.core.prompt.llm import FakeLLMProvider, LLMProvider
+from naiauto.core.prompt.llm import FakeLLMProvider
 
 
 def test_fake_provider_returns_canned_response():
