@@ -49,6 +49,8 @@ def test_unknown_character_id_warns_and_drops():
     )
     assert rels == []
     assert len(warns) == 1
+    # [review #6] 경고는 GUI 문자열이 아닌 데이터지만 다국어 UI에 노출되므로 영어
+    assert warns[0] == "unknown character id: c9 (dropped)"
 
 
 def test_unknown_action_warns_and_drops():
@@ -58,6 +60,7 @@ def test_unknown_action_warns_and_drops():
     )
     assert rels == []
     assert len(warns) == 1
+    assert warns[0] == "unknown relationship action: teleporting (dropped)"
 
 
 def test_all_actions_are_snake_case():

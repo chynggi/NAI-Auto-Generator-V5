@@ -247,11 +247,15 @@ class TagResolver:
 
         하나 이상 단어가 DB(alias 경유 포함)에 있으면 그 refs만 반환한다.
         단어 "bob"은 "bob_cut"으로 매핑을 시도한다. 하나도 없으면 None.
+        [review #7] 일부 단어만 실패하면 검증된 refs 뒤에 원문 전체(norm)의
+        unresolved TagRef를 붙인다 — 누락 단어가 조용히 사라지지 않고
+        컴파일러의 unresolved 요약에 노출되도록.
         """
         for suffix in ("_hair", "_eyes"):
             if not norm.endswith(suffix):
                 continue
             found: list[TagRef] = []
+            failed = False
             for word in norm[: -len(suffix)].split("_"):
                 if not word:
                     continue
@@ -260,6 +264,10 @@ class TagResolver:
                     entry = self._lookup("bob_cut")
                 if entry is not None:
                     found.append(self._verified_ref(entry))
+                else:
+                    failed = True
+            if found and failed:
+                found.append(TagRef(tag=norm, status="unresolved", post_count=0))
             return tuple(found) if found else None
         return None
 

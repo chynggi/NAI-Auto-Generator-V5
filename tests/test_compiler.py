@@ -187,3 +187,53 @@ def test_modify_preserved_token_exact_segment_match():
     assert "__hairstyle__" in compiled.base_prompt
     segments = {s.strip() for s in compiled.base_prompt.split(",")}
     assert "girl" not in segments
+
+
+def test_modify_preserved_tokens_spliced_into_tag_line_before_nl():
+    # [review #2] 보존 토큰은 base 끝(NL 문단 뒤)이 아니라 태그 라인("\n\n" 앞)에 붙는다
+    existing = "1girl, silver_hair, school_uniform, __hairstyle__, classroom"
+    data = GOLDEN_JSON.replace(
+        '"city", "night", "rain", "wet_road", "neon_lights"', '"rooftop", "night"'
+    ).replace(
+        '"natural_language": ""', '"natural_language": "The two girls stand in the rain."'
+    )
+    compiled = _compiler(response=data).modify(
+        existing_prompt=existing,
+        instruction="교실을 밤의 옥상으로 바꾸고 우산을 추가해줘.",
+        mode="hybrid",
+    )
+    assert "__hairstyle__" in compiled.base_prompt
+    tag_line, _, nl_part = compiled.base_prompt.partition("\n\n")
+    assert "__hairstyle__" in tag_line
+    assert "__hairstyle__" not in nl_part
+    assert tag_line.endswith("__hairstyle__")  # 태그 라인 끝에 ", "로 스플라이스
+
+
+def test_character_negative_tags_resolved_through_resolver():
+    # [review #1] 캐릭터 negative_tags도 resolver를 거친다 — 환각 네거티브는
+    # merge(CharacterCaption.uc)까지 도달하지 못하고 unresolved로 취합된다.
+    from naiauto.core.prompt.merge import to_generation_data
+
+    data = GOLDEN_JSON.replace(
+        '"tags": ["long_hair", "silver_hair", "black_dress", "standing"], "position_hint": "left"',
+        '"tags": ["long_hair", "silver_hair", "black_dress", "standing"], "position_hint": "left",'
+        ' "negative_tags": ["bad_hands", "quantum_glow"]',
+    )
+    compiled = _compiler(response=data).compile("테스트", mode="hybrid")
+    c1 = next(c for c in compiled.characters if c.id == "c1")
+    assert "bad_hands" in c1.negative_tags  # 검증된 태그만 이름 문자열로
+    assert "quantum_glow" not in c1.negative_tags
+    assert "quantum_glow" in compiled.unresolved
+    assert any("quantum_glow" in w for w in compiled.warnings)
+    # merge 레이어: uc에는 검증된 태그만 (스펙 §74 경로 차단)
+    merged = to_generation_data(compiled)
+    c1_uc = merged.characters[0].uc
+    assert "bad_hands" in c1_uc
+    assert "quantum_glow" not in c1_uc
+
+
+def test_invalid_mode_raises_value_error():
+    with pytest.raises(ValueError, match="invalid mode"):
+        _compiler().compile("테스트", mode="bogus")
+    with pytest.raises(ValueError, match="invalid mode"):
+        _compiler().modify("1girl", "옥상으로 바꿔줘", mode="bogus")

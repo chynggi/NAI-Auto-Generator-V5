@@ -55,3 +55,101 @@ def test_compiler_error_keys_in_all_languages(qapp):
         compiler_keys = set(data["translations"]["compiler"])
         missing = set(NEW_COMPILER_KEYS) - compiler_keys
         assert not missing, f"{path.name}: missing compiler keys {sorted(missing)}"
+
+
+# ── 워커 스레드 로직 (검증: 성공/오류/취소 흐름) ───────────────────────
+# _worker_convert를 GUI 스레드에서 직접 호출하면 시그널이 direct connection으로
+# 동기 전달되므로 스레드 없이도 핸들러(_on_converted 등)가 즉시 실행된다.
+
+_GOLDEN_JSON = """{
+  "scene": {
+    "tags": ["cafe", "night"],
+    "subjects": ["girl", "girl"],
+    "description": "",
+    "natural_language": ""
+  },
+  "characters": [
+    {"id": "c1", "description": "", "tags": ["long_hair", "black_dress"], "position_hint": "left"}
+  ],
+  "relationships": [],
+  "camera": "", "composition": "", "style": "",
+  "negative": [], "unresolved": []
+}"""
+
+
+def _compiler(response=_GOLDEN_JSON, error=None):
+    from naiauto.core.prompt.compiler import PromptCompiler
+    from naiauto.core.prompt.formatter import PromptFormatter
+    from naiauto.core.prompt.llm import FakeLLMProvider
+    from naiauto.core.prompt.resolver import TagResolver
+
+    resolver = TagResolver()
+    assert resolver.load()
+    return PromptCompiler(
+        provider=FakeLLMProvider(response=response, error=error),
+        resolver=resolver,
+        formatter=PromptFormatter(preserve_natural_language=True, relationship_style="natural"),
+    )
+
+
+def _dialog(qapp):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.prompt_compiler_dialog import PromptCompilerDialog
+
+    dialog = PromptCompilerDialog(I18nManager(), AppSettings())
+    dialog._compiler = _compiler()  # LLM 네트워크 없이 결정적 응답으로 교체
+    return dialog
+
+
+def _convert_inputs(text="두 소녀가 카페에 있다", mode="hybrid"):
+    from naiauto.ui.prompt_compiler_dialog import _ConvertInputs
+
+    return _ConvertInputs(modify=False, existing="", instruction="", text=text, mode=mode)
+
+
+def test_worker_convert_success_updates_preview_and_enables_apply(qapp):
+    dialog = _dialog(qapp)
+    dialog._worker_convert(_convert_inputs())
+    assert dialog._compiled is not None
+    preview = dialog._preview_browser.toPlainText()
+    assert "cafe" in preview and "long_hair" in preview
+    assert dialog._final_edit.toPlainText() != ""
+    assert dialog.apply_button.isEnabled()
+    assert dialog.insert_button.isEnabled()
+    assert dialog.replace_button.isEnabled()
+    assert dialog.convert_button.isEnabled()  # idle 복구
+    assert not dialog.cancel_button.isEnabled()
+    dialog.close()
+
+
+def test_worker_convert_error_recovers_idle(qapp, monkeypatch):
+    from naiauto.core.prompt.errors import CompilerConnectionError
+    from naiauto.ui.prompt_compiler_dialog import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: shown.append(args))
+    dialog = _dialog(qapp)
+    dialog._compiler = _compiler(error=CompilerConnectionError("offline"))
+    dialog._worker_convert(_convert_inputs())
+    assert shown  # 오류 경고 호출 (모달 차단 없이)
+    assert dialog._compiled is None
+    assert not dialog.apply_button.isEnabled()
+    assert dialog.convert_button.isEnabled()  # idle 복구
+    assert not dialog.cancel_button.isEnabled()
+    assert dialog._status_label.text() != ""  # 오류 메시지 표시
+    assert dialog._compiler_worker is None
+    dialog.close()
+
+
+def test_worker_convert_cancel_discards_result(qapp):
+    dialog = _dialog(qapp)
+    dialog._cancel_requested = True
+    dialog._worker_convert(_convert_inputs())
+    assert dialog._compiled is None  # 결과 폐기
+    assert not dialog.apply_button.isEnabled()
+    assert dialog.convert_button.isEnabled()  # idle 복구
+    assert not dialog.cancel_button.isEnabled()
+    assert dialog._status_label.text() == ""
+    assert dialog._compiler_worker is None
+    dialog.close()

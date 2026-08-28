@@ -79,6 +79,10 @@ class OllamaProvider:
             data = resp.json()
         except json.JSONDecodeError as e:
             raise CompilerParseError(f"LLM response is not valid JSON: {e}") from e
+        # [review #4] JSON 배열/문자열 응답은 dict 계약 위반 — AttributeError 대신
+        # provider 계약(모든 오류는 CompilerError)을 지키는 ParseError로 변환한다.
+        if not isinstance(data, dict):
+            raise CompilerParseError("LLM response is not a JSON object")
         content = data.get("message", {}).get("content")
         if not content:
             raise CompilerEmptyResultError("LLM response has no content")

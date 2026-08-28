@@ -108,6 +108,16 @@ def test_ollama_provider_empty_content(monkeypatch):
         provider.chat([], temperature=0.4, max_tokens=32, timeout=10)
 
 
+def test_ollama_provider_non_dict_json_raises_parse_error(monkeypatch):
+    # [review #4] JSON 배열 응답은 dict 계약 위반 — AttributeError가 아니라
+    # provider 계약(모든 오류는 CompilerError)을 지키는 ParseError로 변환한다
+    resp = _FakeResponse(json_data=[])
+    _monkeypatch_post(monkeypatch, resp)
+    provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3")
+    with pytest.raises(CompilerParseError):
+        provider.chat([], temperature=0.4, max_tokens=32, timeout=10)
+
+
 def test_create_provider_factory():
     p = create_provider(provider="openai_compatible", base_url="http://x/v1", model="m")
     assert isinstance(p, OpenAICompatibleProvider)

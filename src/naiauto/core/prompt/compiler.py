@@ -28,6 +28,7 @@ from naiauto.core.prompt.providers import API_KEY_CREDENTIAL, create_provider
 from naiauto.core.prompt.relationship import normalize_relationships
 from naiauto.core.prompt.resolver import TagResolver
 from naiauto.core.prompt.schema import (
+    MODE_TAGS,
     CharacterPrompt,
     CompiledPrompt,
     LLMStructuredPrompt,
@@ -66,6 +67,8 @@ class PromptCompiler:
 
     def compile(self, text: str, *, mode: str = "hybrid") -> CompiledPrompt:
         """자연어 → CompiledPrompt. 빈 입력은 CompilerEmptyResultError."""
+        if mode not in MODE_TAGS:
+            raise ValueError(f"invalid mode: {mode!r} (expected one of {MODE_TAGS})")
         if not text.strip():
             raise CompilerEmptyResultError("empty input")
         raw = self._parser.parse(text)
@@ -76,9 +79,12 @@ class PromptCompiler:
 
         1. 기존 프롬프트에서 보존 토큰(``__dynamic__``/``{...}``)을 추출해
            파서(LLM)에 알린다.
-        2. 결과 base_prompt에 없는 보존 토큰은 끝에 ", "로 이어붙여
-           컴파일러가 wildcard를 제거하지 않도록 보장한다.
+        2. 결과 base_prompt 태그 라인에 없는 보존 토큰은 태그 라인 끝에
+           ", "로 이어붙여 컴파일러가 wildcard를 제거하지 않도록 보장한다
+           (NL 문단 뒤가 아니라 태그 라인에 붙는다).
         """
+        if mode not in MODE_TAGS:
+            raise ValueError(f"invalid mode: {mode!r} (expected one of {MODE_TAGS})")
         preserved = tuple(PRESERVED_TOKEN_RE.findall(existing_prompt))
         raw = self._parser.parse(instruction, existing_prompt=existing_prompt, preserved=preserved)
         result = self._assemble(raw, mode)
@@ -90,8 +96,10 @@ class PromptCompiler:
         ]
         if missing:
             suffix = ", ".join(missing)
-            base = f"{result.base_prompt}, {suffix}" if result.base_prompt else suffix
-            result = replace(result, base_prompt=base)
+            # [review #2] "\n\n" 뒤는 NL 문단 — 보존 토큰은 태그 라인(head)에 스플라이스한다.
+            head, sep, tail = result.base_prompt.partition("\n\n")
+            head = f"{head}, {suffix}" if head else suffix
+            result = replace(result, base_prompt=f"{head}{sep}{tail}")
         return result
 
     # ------------------------------------------------------------------
@@ -111,13 +119,17 @@ class PromptCompiler:
         for model in raw.characters:
             char_refs, char_unresolved = self._resolve_tags(model.tags)
             unresolved.extend(char_unresolved)
+            # [review #1] 캐릭터 negative_tags도 resolver 검증 — 환각 네거티브가
+            # merge(CharacterCaption.uc)까지 도달하지 못하게 scene negative와 동일한 경로.
+            neg_refs, neg_unresolved = self._resolve_tags(model.negative_tags)
+            unresolved.extend(neg_unresolved)
             built_chars.append(
                 CharacterPrompt(
                     id=model.id,
                     description=model.description,
                     tags=tuple(char_refs),
                     raw_tags=tuple(model.tags),
-                    negative_tags=tuple(model.negative_tags),
+                    negative_tags=tuple(ref.tag for ref in neg_refs),
                     pose=model.pose,
                     expression=model.expression,
                     position_hint=model.position_hint,
@@ -239,7 +251,7 @@ def build_compiler(settings) -> PromptCompiler:
     if comp is None:
         comp = SimpleNamespace()
 
-    provider_name = getattr(ai, "provider", "") or "ollama"
+    provider_name = getattr(ai, "provider", "") or "openai_compatible"
     base_url = getattr(ai, "base_url", "") or ""
     model = getattr(ai, "model", "") or ""
     # 온전성 보정: ollama는 model 생략 시 기본 모델명 사용

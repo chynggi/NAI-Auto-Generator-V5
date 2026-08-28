@@ -194,12 +194,14 @@ class PromptAiPage(OptionsPage):
             ai.api_key_available = False
         key_text = self.api_key_edit.text().strip()
         if key_text:
-            if credentials.is_available():
-                credentials.save_credential(API_KEY_CREDENTIAL, key_text)
+            # [review #3] is_available()만 보지 않고 실제 저장 성공 여부를 확인한다 —
+            # keyring 백엔드가 저장 단계에서 실패해도 저장된 것처럼 표시되지 않게.
+            # save_credential은 keyring 미사용 환경에서도 False를 돌려준다.
+            if credentials.save_credential(API_KEY_CREDENTIAL, key_text):
                 ai.api_key_available = True
             else:
-                # keyring을 쓸 수 없으면 어디에도 저장하지 않는다 — settings.json에
-                # 키가 들어가는 유일한 경로라 차단한다 (§28, §64).
+                # keyring을 쓸 수 없거나 저장에 실패하면 어디에도 저장하지 않는다 —
+                # settings.json에 키가 들어가는 유일한 경로라 차단한다 (§28, §64).
                 ai.api_key_available = False
                 self._notices.append(KEYRING_WARN_KEY)
             self.api_key_edit.clear()

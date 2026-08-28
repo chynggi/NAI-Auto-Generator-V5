@@ -77,6 +77,16 @@ def test_short_bob_hair_maps_bob_to_bob_cut(resolver):
     assert all(r.status == "verified" for r in refs)
 
 
+def test_partial_compound_keeps_unresolved_word(resolver):
+    # [review #7] "long zzz hair" — long_hair는 verified, 실패한 단어는 조용히
+    # 사라지지 않고 원문 전체의 unresolved ref로 끝에 붙는다
+    refs = resolver.resolve_phrase("long zzz hair")
+    assert any(r.tag == "long_hair" and r.status == "verified" for r in refs)
+    assert refs[-1].tag == "long_zzz_hair"
+    assert refs[-1].status == "unresolved"
+    assert refs[-1].post_count == 0
+
+
 def test_default_path_uses_bundled_database():
     # database_path=None → 내장 DB (동봉 22K + 보조 4)를 그대로 로드한다
     r = TagResolver()

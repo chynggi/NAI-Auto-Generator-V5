@@ -94,15 +94,11 @@ def normalize_relationships(
     warns: list[str] = []
     for rel in raw:
         if rel.source not in character_ids or rel.target not in character_ids:
-            warns.append(
-                f"관계에서 알 수 없는 캐릭터 id 제외: '{rel.source}'→'{rel.target}' (action='{rel.action}')"
-            )
+            warns.append(f"unknown character id: {rel.source} (dropped)")
             continue
         action = normalize_action(rel.action)
         if action is None:
-            warns.append(
-                f"관계에서 알 수 없는 액션 제외: '{rel.source}'→'{rel.target}' (action='{rel.action}')"
-            )
+            warns.append(f"unknown relationship action: {rel.action} (dropped)")
             continue
         rels.append(
             RelationshipPrompt(source=rel.source, target=rel.target, action=action, mutual=rel.mutual)
