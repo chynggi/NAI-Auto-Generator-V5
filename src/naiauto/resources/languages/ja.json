@@ -326,6 +326,7 @@
       "converting": "変換中...",
       "result_scene": "Scene / Base",
       "result_character_n": "Character {0}",
+      "result_relationship_row": "{0} ↔ {1} : {2}",
       "result_relationships": "Relationships",
       "result_final_prompt": "最終プロンプト",
       "result_negative": "Negative",
@@ -338,6 +339,11 @@
       "inserted": "コンパイル結果を挿入しました。",
       "no_result": "先に変換を実行してください。",
       "error_title": "コンパイル失敗",
+      "err_connection": "LLMサーバーに接続できません",
+      "err_timeout": "タイムアウトしました",
+      "err_auth": "認証に失敗しました",
+      "err_parse": "LLMの応答を解析できませんでした",
+      "err_empty": "結果が空です",
       "warn_keyring": "システムキーリングを利用できないため、LLM APIキーを保存しませんでした。"
     },
     "misc": {

@@ -326,6 +326,7 @@
       "converting": "Converting...",
       "result_scene": "Scene / Base",
       "result_character_n": "Character {0}",
+      "result_relationship_row": "{0} ↔ {1} : {2}",
       "result_relationships": "Relationships",
       "result_final_prompt": "Final Prompt",
       "result_negative": "Negative",
@@ -338,6 +339,11 @@
       "inserted": "Compile result inserted.",
       "no_result": "Run a conversion first.",
       "error_title": "Compile Failed",
+      "err_connection": "Cannot connect to the LLM server",
+      "err_timeout": "Request timed out",
+      "err_auth": "Authentication failed",
+      "err_parse": "Could not parse the LLM response",
+      "err_empty": "The result is empty",
       "warn_keyring": "The system keyring is unavailable, so the LLM API key was not saved."
     },
     "misc": {

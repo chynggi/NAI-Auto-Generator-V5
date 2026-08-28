@@ -326,6 +326,7 @@
       "converting": "转换中……",
       "result_scene": "Scene / Base",
       "result_character_n": "Character {0}",
+      "result_relationship_row": "{0} ↔ {1} : {2}",
       "result_relationships": "Relationships",
       "result_final_prompt": "最终提示词",
       "result_negative": "Negative",
@@ -338,6 +339,11 @@
       "inserted": "已插入编译结果。",
       "no_result": "请先执行转换。",
       "error_title": "编译失败",
+      "err_connection": "无法连接到 LLM 服务器",
+      "err_timeout": "请求超时",
+      "err_auth": "认证失败",
+      "err_parse": "无法解析 LLM 响应",
+      "err_empty": "结果为空",
       "warn_keyring": "系统密钥环不可用，未保存 LLM API 密钥。"
     },
     "misc": {
