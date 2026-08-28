@@ -115,3 +115,61 @@ def test_create_provider_factory():
     assert isinstance(p2, OllamaProvider)
     with pytest.raises(CompilerProviderUnavailableError):
         create_provider(provider="wat", base_url="", model="")
+
+
+# ── 요청 내용 검증 (Minor #4 해소 — Bearer 생략 규칙 포함) ──────────────
+
+def _capture_post(monkeypatch):
+    """requests.post를 가로채 (url, kwargs)를 기록하고 200 응답을 돌려준다."""
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        # OpenAI(choices)와 Ollama(message) 파서를 모두 만족시키는 응답
+        return _FakeResponse(
+            json_data={
+                "choices": [{"message": {"content": "ok"}}],
+                "message": {"content": "ok"},
+            }
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    return captured
+
+
+def test_openai_request_url_and_payload(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    provider = OpenAICompatibleProvider(base_url="http://127.0.0.1:7112/v1", model="qwen")
+    provider.chat([{"role": "user", "content": "hi"}], temperature=0.5, max_tokens=64, timeout=10)
+
+    assert captured["url"] == "http://127.0.0.1:7112/v1/chat/completions"
+    payload = captured["kwargs"]["json"]
+    assert payload["model"] == "qwen"
+    assert payload["messages"] == [{"role": "user", "content": "hi"}]
+    assert payload["temperature"] == 0.5
+    assert payload["max_tokens"] == 64
+    assert payload["stream"] is False
+    headers = captured["kwargs"]["headers"]
+    assert "Authorization" not in headers  # api_key 없으면 Bearer 생략 (§28)
+
+
+def test_openai_bearer_sent_only_with_api_key(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    provider = OpenAICompatibleProvider(base_url="http://x/v1", model="m", api_key="secret")
+    provider.chat([], temperature=0, max_tokens=1, timeout=1)
+    headers = captured["kwargs"]["headers"]
+    assert headers["Authorization"] == "Bearer secret"
+    assert captured["kwargs"]["timeout"] == 1
+
+
+def test_ollama_request_url_and_payload(monkeypatch):
+    captured = _capture_post(monkeypatch)
+    provider = OllamaProvider(base_url="http://localhost:11434", model="gemma3")
+    provider.chat([{"role": "user", "content": "hi"}], temperature=0.4, max_tokens=32, timeout=10)
+
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    payload = captured["kwargs"]["json"]
+    assert payload["model"] == "gemma3"
+    assert payload["stream"] is False
+    assert payload["options"] == {"temperature": 0.4, "num_predict": 32}

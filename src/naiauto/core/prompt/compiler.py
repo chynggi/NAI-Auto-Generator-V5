@@ -15,6 +15,7 @@ formatter(문자열 조립)를 순서대로 묶어 최종 ``CompiledPrompt``를 
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -57,9 +58,7 @@ class PromptCompiler:
         timeout: float = 120.0,
         use_resolver: bool = True,
     ) -> None:
-        self._parser = SceneParser(
-            provider, temperature=temperature, max_tokens=max_tokens, timeout=timeout
-        )
+        self._parser = SceneParser(provider, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         self._resolver = resolver
         self._formatter = formatter
         #: True = resolver로 태그 검증, False = LLM 원문 태그를 전부 verified로
@@ -72,9 +71,7 @@ class PromptCompiler:
         raw = self._parser.parse(text)
         return self._assemble(raw, mode)
 
-    def modify(
-        self, existing_prompt: str, instruction: str, *, mode: str = "hybrid"
-    ) -> CompiledPrompt:
+    def modify(self, existing_prompt: str, instruction: str, *, mode: str = "hybrid") -> CompiledPrompt:
         """기존 프롬프트 수정 — wildcard/artist 토큰 보존 (스펙 §51, §52).
 
         1. 기존 프롬프트에서 보존 토큰(``__dynamic__``/``{...}``)을 추출해
@@ -83,11 +80,14 @@ class PromptCompiler:
            컴파일러가 wildcard를 제거하지 않도록 보장한다.
         """
         preserved = tuple(PRESERVED_TOKEN_RE.findall(existing_prompt))
-        raw = self._parser.parse(
-            instruction, existing_prompt=existing_prompt, preserved=preserved
-        )
+        raw = self._parser.parse(instruction, existing_prompt=existing_prompt, preserved=preserved)
         result = self._assemble(raw, mode)
-        missing = [token for token in preserved if token not in result.base_prompt]
+        # [Minor #5] 보존 토큰 확인은 부분 문자열이 아니라 태그 목록 세그먼트 단위로 —
+        # "1girl"이 "1girls"의 부분 문자열로 오인되는 일이 없도록 한다.
+        tag_part = result.base_prompt.split("\n\n", 1)[0]
+        missing = [
+            token for token in preserved if not re.search(rf"(^|,)\s*{re.escape(token)}\s*(,|$)", tag_part)
+        ]
         if missing:
             suffix = ", ".join(missing)
             base = f"{result.base_prompt}, {suffix}" if result.base_prompt else suffix
@@ -138,8 +138,10 @@ class PromptCompiler:
                 seen.add(key)
                 relationships.append(rel)
 
-        # 5. negative 해석 — verified/inferred만 (unresolved는 final에서 제외)
-        neg_refs, _ = self._resolve_tags(raw.negative)
+        # 5. negative 해석 — verified/inferred만 (unresolved는 final에서 제외).
+        #    [Minor #3] negative의 unresolved도 취합해 사용자에게 알린다.
+        neg_refs, neg_unresolved = self._resolve_tags(raw.negative)
+        unresolved.extend(neg_unresolved)
 
         # 6. scene 구조 (subjects는 count 태그용)
         scene = ScenePrompt(
@@ -162,16 +164,13 @@ class PromptCompiler:
             mode=mode,
         )
         characters = [
-            replace(c, prompt_text=self._formatter.character_prompt_text(c, mode))
-            for c in characters
+            replace(c, prompt_text=self._formatter.character_prompt_text(c, mode)) for c in characters
         ]
 
         # 9. 빈 결과: scene 태그도 캐릭터도 없으면 의미 없는 프롬프트.
         #    캐릭터가 0명이면 scene만 있어도 유효 (배경 프롬프트).
         if not scene.tags and not characters:
-            raise CompilerEmptyResultError(
-                "no scene tags or characters in compile result"
-            )
+            raise CompilerEmptyResultError("no scene tags or characters in compile result")
 
         # 10. warnings = 관계 경고 + unresolved 요약 1줄
         warnings = list(rel_warnings)
@@ -196,10 +195,12 @@ class PromptCompiler:
         """후보 문구 목록 → (verified/inferred TagRef 목록, unresolved 태그명 목록).
 
         use_resolver=False면 LLM 원문을 그대로 verified로 처리 (태그 검증 끄기).
-        빈 문구는 건너뛴다.
+        빈 문구는 건너뛴다. [Minor #1] 같은 태그가 여러 번 나오면 첫 번째만
+        유지한다 (LLM 중복 출력 대비, 순서 보존).
         """
         refs: list[TagRef] = []
         unresolved: list[str] = []
+        seen: set[str] = set()
         for phrase in phrases:
             phrase = phrase.strip()
             if not phrase:
@@ -207,11 +208,15 @@ class PromptCompiler:
             if self.use_resolver:
                 for ref in self._resolver.resolve_phrase(phrase):
                     if ref.status in _OK_STATUSES:
-                        refs.append(ref)
+                        if ref.tag not in seen:
+                            seen.add(ref.tag)
+                            refs.append(ref)
                     else:
                         unresolved.append(ref.tag)
             else:
-                refs.append(TagRef(tag=phrase, status="verified"))
+                if phrase not in seen:
+                    seen.add(phrase)
+                    refs.append(TagRef(tag=phrase, status="verified"))
         return refs, unresolved
 
 

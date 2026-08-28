@@ -23,8 +23,13 @@ from naiauto.core.prompt.schema import CharacterPrompt, RelationshipPrompt, Scen
 
 #: 단수 주제어 → 복수형 (count 태그·상호 관계 문장의 명사에 사용).
 SUBJECT_PLURALS: dict[str, str] = {
-    "girl": "girls", "boy": "boys", "man": "men", "woman": "women",
-    "child": "children", "cat": "cats", "dog": "dogs",
+    "girl": "girls",
+    "boy": "boys",
+    "man": "men",
+    "woman": "women",
+    "child": "children",
+    "cat": "cats",
+    "dog": "dogs",
 }
 
 #: count 태그 정규식 ("2girls", "1girl" 등) — scene 태그 중복 제거에 사용.
@@ -32,11 +37,19 @@ COUNT_TAG_RE = re.compile(r"^\d+(girls|girl|boys|boy|men|man|women|woman|childre
 
 #: 정규화 액션(snake_case) → 자연어 구절 (관계 문장용).
 ACTION_PHRASES: dict[str, str] = {
-    "looking_at": "looking at", "talking_to": "talking to", "facing": "facing",
-    "holding_hands": "holding hands", "hugging": "hugging",
-    "standing_next_to": "standing next to", "sitting_opposite": "sitting opposite",
-    "chasing": "chasing", "following": "following", "pointing_at": "pointing at",
-    "touching": "touching", "waving_to": "waving to", "leaning_on": "leaning on",
+    "looking_at": "looking at",
+    "talking_to": "talking to",
+    "facing": "facing",
+    "holding_hands": "holding hands",
+    "hugging": "hugging",
+    "standing_next_to": "standing next to",
+    "sitting_opposite": "sitting opposite",
+    "chasing": "chasing",
+    "following": "following",
+    "pointing_at": "pointing at",
+    "touching": "touching",
+    "waving_to": "waving to",
+    "leaning_on": "leaning on",
 }
 
 #: 최종 조립 후 남는 중복 쉼표/공백 정리 ("tag ,, tag" → "tag, tag").
@@ -56,15 +69,22 @@ class PromptFormatter:
     count 태그는 base에만 (스펙 §21, §55). scene 태그에 이미 count 태그가 있으면 중복 제거.
     """
 
-    def __init__(self, *, preserve_natural_language: bool = True,
-                 relationship_style: str = "natural") -> None:
+    def __init__(
+        self, *, preserve_natural_language: bool = True, relationship_style: str = "natural"
+    ) -> None:
         self.preserve_natural_language = preserve_natural_language
         # relationship_style: "natural" | "tag"
         self.relationship_style = relationship_style
 
-    def format(self, *, scene: ScenePrompt, characters: tuple[CharacterPrompt, ...],
-               relationships: tuple[RelationshipPrompt, ...],
-               negative_tags: tuple[TagRef, ...], mode: str) -> tuple[str, str]:
+    def format(
+        self,
+        *,
+        scene: ScenePrompt,
+        characters: tuple[CharacterPrompt, ...],
+        relationships: tuple[RelationshipPrompt, ...],
+        negative_tags: tuple[TagRef, ...],
+        mode: str,
+    ) -> tuple[str, str]:
         """(base_prompt, negative_prompt) 반환."""
         base = self._base_prompt(scene, characters, relationships, mode)
         negative = ", ".join(t.tag for t in negative_tags if t.status == "verified")
@@ -84,8 +104,9 @@ class PromptFormatter:
             return f"{len(subjects)}{SUBJECT_PLURALS[first]}"
         return f"{len(subjects)}{first}"
 
-    def relationship_sentences(self, relationships: tuple[RelationshipPrompt, ...],
-                               characters: tuple[CharacterPrompt, ...]) -> list[str]:
+    def relationship_sentences(
+        self, relationships: tuple[RelationshipPrompt, ...], characters: tuple[CharacterPrompt, ...]
+    ) -> list[str]:
         """관계 → 자연어 문장 목록.
 
         상호 쌍: "The two characters are {phrase} each other." (주제어 없으면 characters)
@@ -131,15 +152,20 @@ class PromptFormatter:
 
     # -- 내부 헬퍼 ----------------------------------------------------------
 
-    def _base_prompt(self, scene: ScenePrompt, characters: tuple[CharacterPrompt, ...],
-                     relationships: tuple[RelationshipPrompt, ...], mode: str) -> str:
+    def _base_prompt(
+        self,
+        scene: ScenePrompt,
+        characters: tuple[CharacterPrompt, ...],
+        relationships: tuple[RelationshipPrompt, ...],
+        mode: str,
+    ) -> str:
         """모드별 base prompt 조립."""
         if mode == "natural":
             return "\n".join(self._natural_parts(scene, characters, relationships))
         count = self.count_tag(scene.subjects)
         scene_tags = [t.tag for t in scene.tags if not COUNT_TAG_RE.match(t.tag)]
         base_tags = ([count] if count else []) + scene_tags
-        if mode != "natural" and self.relationship_style == "tag":
+        if self.relationship_style == "tag":  # natural은 위에서 조기 반환 — 이 라인에선 tag/hybrid만
             segment = self.relationship_tag_segment(relationships)
             if segment:
                 base_tags.append(segment)
@@ -150,8 +176,12 @@ class PromptFormatter:
                 return f"{tag_line}\n\n" + "\n".join(segments)
         return tag_line
 
-    def _hybrid_segments(self, scene: ScenePrompt, characters: tuple[CharacterPrompt, ...],
-                         relationships: tuple[RelationshipPrompt, ...]) -> list[str]:
+    def _hybrid_segments(
+        self,
+        scene: ScenePrompt,
+        characters: tuple[CharacterPrompt, ...],
+        relationships: tuple[RelationshipPrompt, ...],
+    ) -> list[str]:
         """hybrid 모드 NL 세그먼트: NL(또는 description) → camera → style → 관계 문장."""
         segments: list[str] = []
         nl = scene.natural_language or scene.description
@@ -161,15 +191,15 @@ class PromptFormatter:
             segments.append(scene.camera)
         if scene.style:
             segments.append(scene.style)
-        segments.extend(
-            self._relationship_sentences(
-                relationships, characters, self._subject_noun(scene)
-            )
-        )
+        segments.extend(self._relationship_sentences(relationships, characters, self._subject_noun(scene)))
         return segments
 
-    def _natural_parts(self, scene: ScenePrompt, characters: tuple[CharacterPrompt, ...],
-                       relationships: tuple[RelationshipPrompt, ...]) -> list[str]:
+    def _natural_parts(
+        self,
+        scene: ScenePrompt,
+        characters: tuple[CharacterPrompt, ...],
+        relationships: tuple[RelationshipPrompt, ...],
+    ) -> list[str]:
         """natural 모드 문장 목록: NL → description → 관계 문장 → camera → style."""
         parts: list[str] = []
         if scene.natural_language:
@@ -177,12 +207,9 @@ class PromptFormatter:
         if scene.description:
             parts.append(scene.description)
         if not parts:
-            parts.append(", ".join(t.tag for t in scene.tags))
-        parts.extend(
-            self._relationship_sentences(
-                relationships, characters, self._subject_noun(scene)
-            )
-        )
+            # [Minor #2] natural 폴백에서도 count 태그는 중복되지 않도록 걸러낸다.
+            parts.append(", ".join(t.tag for t in scene.tags if not COUNT_TAG_RE.match(t.tag)))
+        parts.extend(self._relationship_sentences(relationships, characters, self._subject_noun(scene)))
         if scene.camera:
             parts.append(scene.camera)
         if scene.style:
@@ -196,9 +223,12 @@ class PromptFormatter:
             return SUBJECT_PLURALS[subjects[0]]
         return "characters"
 
-    def _relationship_sentences(self, relationships: tuple[RelationshipPrompt, ...],
-                                characters: tuple[CharacterPrompt, ...],
-                                subject_noun: str) -> list[str]:
+    def _relationship_sentences(
+        self,
+        relationships: tuple[RelationshipPrompt, ...],
+        characters: tuple[CharacterPrompt, ...],
+        subject_noun: str,
+    ) -> list[str]:
         """관계 → 자연어 문장 (subject_noun은 상호 쌍 문장의 명사)."""
         sentences: list[str] = []
         used: set[int] = set()
@@ -220,15 +250,15 @@ class PromptFormatter:
             pos_dst = dst.position_hint if dst else ""
             if pos_src and pos_dst:
                 sentences.append(
-                    f"The character on the {pos_src} is {phrase} "
-                    f"the character on the {pos_dst}."
+                    f"The character on the {pos_src} is {phrase} the character on the {pos_dst}."
                 )
             else:
                 sentences.append(f"Character {r.source} is {phrase} Character {r.target}.")
         return sentences
 
-    def _mutual_partner_index(self, relationships: tuple[RelationshipPrompt, ...],
-                              i: int, used: set[int]) -> int | None:
+    def _mutual_partner_index(
+        self, relationships: tuple[RelationshipPrompt, ...], i: int, used: set[int]
+    ) -> int | None:
         """양방향 + 같은 액션의 상호 쌍 파트너 인덱스 (이미 사용된 항목 제외). 없으면 None."""
         r = relationships[i]
         for j, r2 in enumerate(relationships):

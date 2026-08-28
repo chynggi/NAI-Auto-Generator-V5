@@ -25,8 +25,7 @@ def test_tag_mode_base_has_count_and_scene():
     fmt = PromptFormatter(preserve_natural_language=True)
     scene = _scene(subjects=("girl", "girl"))
     chars = (_char("c1", ["silver_hair", "school_uniform"]), _char("c2", ["black_hair"]))
-    base, neg = fmt.format(scene=scene, characters=chars, relationships=(),
-                           negative_tags=(), mode="tag")
+    base, neg = fmt.format(scene=scene, characters=chars, relationships=(), negative_tags=(), mode="tag")
     assert base.startswith("2girls")
     assert "rain" in base and "night" in base and "alley" in base
     assert "silver_hair" not in base  # 캐릭터 태그는 base에 없음
@@ -76,6 +75,20 @@ def test_natural_mode_prose_only():
     assert "silver_hair" not in base
 
 
+def test_natural_mode_tag_fallback_filters_count_tags():
+    # [Minor #2] 자연어/설명이 없어 태그 폴백을 쓸 때 count 태그(2girls)는 빠진다
+    fmt = PromptFormatter()
+    scene = _scene(
+        subjects=("girl", "girl"),
+        tags=(TagRef("2girls"), TagRef("rain"), TagRef("night")),
+        description="",
+        natural_language="",
+    )
+    base, _ = fmt.format(scene=scene, characters=(), relationships=(), negative_tags=(), mode="natural")
+    assert "rain" in base and "night" in base
+    assert "2girls" not in base
+
+
 def test_count_tag_rules():
     fmt = PromptFormatter()
     assert fmt.count_tag(("girl", "girl")) == "2girls"
@@ -99,17 +112,17 @@ def test_relationship_sentences_one_way_with_positions():
         _char("c1", ["silver_hair"], position_hint="left"),
         _char("c2", ["black_hair"], position_hint="right"),
     )
-    sentences = fmt.relationship_sentences(
-        (RelationshipPrompt("c1", "c2", "looking_at"),), chars
-    )
+    sentences = fmt.relationship_sentences((RelationshipPrompt("c1", "c2", "looking_at"),), chars)
     assert sentences == ["The character on the left is looking at the character on the right."]
 
 
 def test_relationship_sentences_mutual():
     fmt = PromptFormatter()
     sentences = fmt.relationship_sentences(
-        (RelationshipPrompt("c1", "c2", "facing", mutual=True),
-         RelationshipPrompt("c2", "c1", "facing", mutual=True)),
+        (
+            RelationshipPrompt("c1", "c2", "facing", mutual=True),
+            RelationshipPrompt("c2", "c1", "facing", mutual=True),
+        ),
         (),
     )
     assert sentences == ["The two characters are facing each other."]
@@ -117,17 +130,17 @@ def test_relationship_sentences_mutual():
 
 def test_relationship_sentences_fallback_ids():
     fmt = PromptFormatter()
-    sentences = fmt.relationship_sentences(
-        (RelationshipPrompt("c1", "c2", "looking_at"),), ()
-    )
+    sentences = fmt.relationship_sentences((RelationshipPrompt("c1", "c2", "looking_at"),), ())
     assert sentences == ["Character c1 is looking at Character c2."]
 
 
 def test_relationship_tag_style():
     fmt = PromptFormatter(relationship_style="tag")
     seg = fmt.relationship_tag_segment(
-        (RelationshipPrompt("c1", "c2", "talking_to", mutual=True),
-         RelationshipPrompt("c2", "c1", "talking_to", mutual=True)),
+        (
+            RelationshipPrompt("c1", "c2", "talking_to", mutual=True),
+            RelationshipPrompt("c2", "c1", "talking_to", mutual=True),
+        ),
     )
     assert seg == "c1#talking_to c2#talking_to"
     seg2 = fmt.relationship_tag_segment((RelationshipPrompt("c1", "c2", "looking_at"),))
@@ -137,9 +150,14 @@ def test_relationship_tag_style():
 def test_negative_prompt_uses_verified_tags_only():
     fmt = PromptFormatter()
     _, neg = fmt.format(
-        scene=_scene(), characters=(), relationships=(),
-        negative_tags=(TagRef("bad_hands", "verified"), TagRef("text", "verified"),
-                       TagRef("made_up_thing", "unresolved")),
+        scene=_scene(),
+        characters=(),
+        relationships=(),
+        negative_tags=(
+            TagRef("bad_hands", "verified"),
+            TagRef("text", "verified"),
+            TagRef("made_up_thing", "unresolved"),
+        ),
         mode="hybrid",
     )
     assert neg == "bad_hands, text"

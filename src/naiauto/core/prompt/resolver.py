@@ -140,12 +140,12 @@ class TagResolver:
 
     @property
     def is_enabled(self) -> bool:
-        """True if the database was loaded successfully."""
+        """DB(메인+보조) 로드 성공 여부."""
         return self._enabled
 
     @property
     def tag_count(self) -> int:
-        """Number of loaded tag entries (main + extra); 0 when disabled."""
+        """로드된 태그 수 (메인+보조); 비활성이면 0."""
         return len(self._db)
 
     def resolve_phrase(self, phrase: str) -> tuple[TagRef, ...]:

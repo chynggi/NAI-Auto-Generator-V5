@@ -16,22 +16,48 @@ from __future__ import annotations
 from naiauto.core.prompt.schema import LLMRelationshipModel, RelationshipPrompt
 
 #: 허용 액션 화이트리스트 (snake_case 정규화명).
-RELATION_ACTIONS: frozenset[str] = frozenset({
-    "looking_at", "talking_to", "facing", "holding_hands", "hugging",
-    "standing_next_to", "sitting_opposite", "chasing", "following",
-    "pointing_at", "touching", "waving_to", "leaning_on"})
+RELATION_ACTIONS: frozenset[str] = frozenset(
+    {
+        "looking_at",
+        "talking_to",
+        "facing",
+        "holding_hands",
+        "hugging",
+        "standing_next_to",
+        "sitting_opposite",
+        "chasing",
+        "following",
+        "pointing_at",
+        "touching",
+        "waving_to",
+        "leaning_on",
+    }
+)
 
 #: LLM이 자연어로 쓸 가능성이 높은 표현 → 정규화 액션 (공백 포함 원문 키).
 ACTION_SYNONYMS: dict[str, str] = {
-    "staring at": "looking_at", "staring": "looking_at", "watching": "looking_at",
-    "gazing at": "looking_at", "gazing": "looking_at", "look at": "looking_at",
-    "conversing with": "talking_to", "chatting with": "talking_to",
-    "talking with": "talking_to", "speaking to": "talking_to", "talking": "talking_to",
-    "embracing": "hugging", "hug": "hugging", "hand in hand": "holding_hands",
-    "hands held": "holding_hands", "next to": "standing_next_to",
-    "standing beside": "standing_next_to", "waving at": "waving_to",
-    "face to face": "facing", "facing each other": "facing",
-    "opposite": "sitting_opposite", "leaning against": "leaning_on",
+    "staring at": "looking_at",
+    "staring": "looking_at",
+    "watching": "looking_at",
+    "gazing at": "looking_at",
+    "gazing": "looking_at",
+    "look at": "looking_at",
+    "conversing with": "talking_to",
+    "chatting with": "talking_to",
+    "talking with": "talking_to",
+    "speaking to": "talking_to",
+    "talking": "talking_to",
+    "embracing": "hugging",
+    "hug": "hugging",
+    "hand in hand": "holding_hands",
+    "hands held": "holding_hands",
+    "next to": "standing_next_to",
+    "standing beside": "standing_next_to",
+    "waving at": "waving_to",
+    "face to face": "facing",
+    "facing each other": "facing",
+    "opposite": "sitting_opposite",
+    "leaning against": "leaning_on",
 }
 
 
@@ -69,24 +95,20 @@ def normalize_relationships(
     for rel in raw:
         if rel.source not in character_ids or rel.target not in character_ids:
             warns.append(
-                f"관계에서 알 수 없는 캐릭터 id 제외: '{rel.source}'→'{rel.target}' "
-                f"(action='{rel.action}')"
+                f"관계에서 알 수 없는 캐릭터 id 제외: '{rel.source}'→'{rel.target}' (action='{rel.action}')"
             )
             continue
         action = normalize_action(rel.action)
         if action is None:
             warns.append(
-                f"관계에서 알 수 없는 액션 제외: '{rel.source}'→'{rel.target}' "
-                f"(action='{rel.action}')"
+                f"관계에서 알 수 없는 액션 제외: '{rel.source}'→'{rel.target}' (action='{rel.action}')"
             )
             continue
         rels.append(
             RelationshipPrompt(source=rel.source, target=rel.target, action=action, mutual=rel.mutual)
         )
         if rel.mutual:
-            rels.append(
-                RelationshipPrompt(source=rel.target, target=rel.source, action=action, mutual=True)
-            )
+            rels.append(RelationshipPrompt(source=rel.target, target=rel.source, action=action, mutual=True))
     return rels, warns
 
 

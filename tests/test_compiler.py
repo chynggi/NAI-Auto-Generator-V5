@@ -30,13 +30,15 @@ GOLDEN_JSON = """{
 
 @pytest.fixture()
 def golden_input() -> str:
-    return ("밤의 비 내리는 도시에서 왼쪽에는 긴 은발의 소녀가 검은 드레스를 입고 서 있고, "
-            "오른쪽에는 붉은 단발머리의 소녀가 우산을 들고 서 있다. "
-            "두 사람은 서로를 바라보고 있으며 젖은 도로에 네온사인이 반사되고 있다. "
-            "카메라는 두 사람을 낮은 앵글에서 바라본다.")
+    return (
+        "밤의 비 내리는 도시에서 왼쪽에는 긴 은발의 소녀가 검은 드레스를 입고 서 있고, "
+        "오른쪽에는 붉은 단발머리의 소녀가 우산을 들고 서 있다. "
+        "두 사람은 서로를 바라보고 있으며 젖은 도로에 네온사인이 반사되고 있다. "
+        "카메라는 두 사람을 낮은 앵글에서 바라본다."
+    )
 
 
-def _compiler(response=GOLDEN_JSON, resolver_kwargs=None):
+def _compiler(response=GOLDEN_JSON):
     resolver = TagResolver()
     assert resolver.load()
     return PromptCompiler(
@@ -99,7 +101,8 @@ def test_compile_empty_input():
 
 def test_compile_with_missing_positions():
     data = GOLDEN_JSON.replace('"position_hint": "left"', '"position_hint": ""').replace(
-        '"position_hint": "right"', '"position_hint": "somewhere"')
+        '"position_hint": "right"', '"position_hint": "somewhere"'
+    )
     compiled = _compiler(response=data).compile("테스트", mode="hybrid")
     assert compiled.characters[0].center_x is None
     assert compiled.characters[1].center_x is None
@@ -107,10 +110,10 @@ def test_compile_with_missing_positions():
 
 def test_modify_preserves_wildcard_tokens():
     existing = "1girl, silver_hair, school_uniform, __hairstyle__, classroom"
-    response = GOLDEN_JSON.replace('"city", "night", "rain", "wet_road", "neon_lights"',
-                                   '"rooftop", "night"')
+    response = GOLDEN_JSON.replace('"city", "night", "rain", "wet_road", "neon_lights"', '"rooftop", "night"')
     compiled = _compiler(response=response).modify(
-        existing_prompt=existing, instruction="교실을 밤의 옥상으로 바꾸고 우산을 추가해줘.",
+        existing_prompt=existing,
+        instruction="교실을 밤의 옥상으로 바꾸고 우산을 추가해줘.",
         mode="hybrid",
     )
     assert "__hairstyle__" in compiled.base_prompt
@@ -142,7 +145,8 @@ def test_resolver_disabled_passes_raw_tags():
 def test_unresolved_and_relationship_warnings_collected():
     # 미해결 태그(quantum_road) + 알 수 없는 관계 액션(teleporting) → warnings 수집
     data = GOLDEN_JSON.replace('"wet_road"', '"quantum_road"').replace(
-        '"action": "looking_at"', '"action": "teleporting"')
+        '"action": "looking_at"', '"action": "teleporting"'
+    )
     compiled = _compiler(response=data).compile("테스트", mode="hybrid")
     assert compiled.unresolved == ("quantum_road",)
     assert any("quantum_road" in w for w in compiled.warnings)
@@ -150,3 +154,36 @@ def test_unresolved_and_relationship_warnings_collected():
     # 관계 경고: 액션 2건 모두 할루시네이션으로 제외
     assert compiled.relationships == ()
     assert len([w for w in compiled.warnings if "teleporting" in w]) == 2
+
+
+def test_duplicate_scene_tags_deduplicated():
+    # [Minor #1] LLM이 같은 태그를 반복 출력해도 base에 한 번만 나온다
+    data = GOLDEN_JSON.replace('"city", "night", "rain"', '"city", "night", "rain", "rain", "city"')
+    compiled = _compiler(response=data).compile("테스트", mode="tag")
+    assert compiled.base_prompt.count("city") == 1
+    assert compiled.base_prompt.count("rain") == 1
+    assert len(compiled.scene.tags) == len({t.tag for t in compiled.scene.tags})
+
+
+def test_negative_unresolved_collected():
+    # [Minor #3] negative 후보 중 태그 DB에 없는 개념도 unresolved로 취합된다
+    data = GOLDEN_JSON.replace('"negative": []', '"negative": ["bad_hands", "quantum_glow"]')
+    compiled = _compiler(response=data).compile("테스트", mode="hybrid")
+    assert "quantum_glow" in compiled.unresolved
+    assert any("quantum_glow" in w for w in compiled.warnings)
+    assert "bad_hands" in compiled.negative_prompt  # 검증된 negative는 유지
+
+
+def test_modify_preserved_token_exact_segment_match():
+    # [Minor #5] 보존 토큰 판정은 세그먼트 단위 — "girl"이 "1girl"에 묻히면 보존 처리된다
+    existing = "girl, __hairstyle__, classroom"
+    data = GOLDEN_JSON.replace('"city", "night", "rain", "wet_road", "neon_lights"', '"rooftop", "night"')
+    compiled = _compiler(response=data).modify(
+        existing_prompt=existing,
+        instruction="교실을 밤의 옥상으로 바꿔줘",
+        mode="tag",
+    )
+    # base가 "2girls, rooftop, night" 형태여도 "girl" 세그먼트는 없음 → "__hairstyle__"만 보존
+    assert "__hairstyle__" in compiled.base_prompt
+    segments = {s.strip() for s in compiled.base_prompt.split(",")}
+    assert "girl" not in segments

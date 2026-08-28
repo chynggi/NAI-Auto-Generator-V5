@@ -69,6 +69,23 @@ def test_nai_negative_vocabulary_verified(resolver):
     assert refs[0].status == "verified"
 
 
+def test_short_bob_hair_maps_bob_to_bob_cut(resolver):
+    # 규칙 3: "short bob hair" → short_hair + bob_cut (bob 특수 매핑)
+    refs = resolver.resolve_phrase("short bob hair")
+    tags = {r.tag for r in refs}
+    assert {"short_hair", "bob_cut"} <= tags
+    assert all(r.status == "verified" for r in refs)
+
+
+def test_default_path_uses_bundled_database():
+    # database_path=None → 내장 DB (동봉 22K + 보조 4)를 그대로 로드한다
+    r = TagResolver()
+    assert r.load() is True
+    assert r.is_enabled is True
+    assert r.tag_count > 20000
+    assert r.resolve_phrase("silver hair")[0].tag == "grey_hair"
+
+
 def test_nonexistent_tag_is_unresolved(resolver):
     refs = resolver.resolve_phrase("cinematic melancholic atmosphere")
     assert len(refs) == 1
