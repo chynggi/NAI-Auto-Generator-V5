@@ -32,7 +32,7 @@ nai-auto-v5-smoke = "naiauto.smoke:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-naiauto = ["resources/languages/*.json", "resources/tags/*.csv"]
+naiauto = ["resources/languages/*.json", "resources/tags/*.csv", "core/prompt/templates/*.md"]
 
 [tool.ruff]
 line-length = 110

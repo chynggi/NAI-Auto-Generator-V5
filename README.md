@@ -40,6 +40,33 @@ NovelAI Diffusion **V5** 이미지 생성을 자동화하는 데스크톱 앱입
 - **📊 상태 표시** — V5 생성 크레딧 게이지 + Anlas 잔액
 - **🌏 4개 언어** — 한국어 / English / 日本語 / 中文, 재시작 없이 전환
 - **🔔 새 버전 확인** — 릴리스가 올라오면 앱이 알려 줍니다 (자동 확인은 끌 수 있음)
+- **💬 자연어 프롬프트 컴파일러** — 장면을 자연어로 설명하면 Scene/Character/Relationship으로 분해하고 내장 태그 DB로 검증 (도구 → 자연어 프롬프트 컴파일러, Ctrl+Shift+P)
+
+### 🤖 자연어 프롬프트 컴파일러 (Natural Language Prompt Compiler)
+
+- 도구 → 자연어 프롬프트 컴파일러(Ctrl+Shift+P)
+- 원하는 장면을 자연어로 설명하면 Scene/Character/Relationship으로 분해
+- Tag / Hybrid(기본) / Natural 3가지 모드
+- 내장 Danbooru 태그 DB로 태그 검증 — 존재하지 않는 태그는 최종 프롬프트에서 제외
+- 변환 결과를 미리 보고 Apply/Insert/Replace로 기존 편집기에 반영
+- 캐릭터 위치(왼쪽/오른쪽)는 캐릭터 위치 캔버스에 자동 반영
+
+### LLM Provider 설정 (옵션 → AI 프롬프트)
+| 설정 | 값 |
+|---|---|
+| Provider | OpenAI-compatible (기본, llama.cpp/LM Studio/원격) 또는 Ollama |
+| Base URL | http://127.0.0.1:7112/v1 (llama.cpp), http://localhost:11434 (Ollama) |
+| Model | 서버에 등록된 모델명 |
+
+### 로컬 LLM 예시
+- llama.cpp server: `llama-server -m model.gguf --port 7112` → Base URL `http://127.0.0.1:7112/v1`
+- LM Studio: Base URL `http://localhost:1234/v1`
+- Ollama: `ollama run gemma3` → Provider=Ollama, Base URL `http://localhost:11434`
+
+### API 키 구분 — 두 개는 별개 credential입니다
+- NovelAI API 키 (pst-...) → 이미지 생성용. 로그인 창에서 입력, keyring 보관.
+- LLM API 키 → 자연어 해석용(원격 provider일 때만 필요). 옵션 → AI 프롬프트에서 입력, keyring 보관.
+- 로컬 LLM(llama.cpp/Ollama)은 키가 필요 없습니다.
 
 ### 📥 다운로드 (Windows)
 
@@ -141,6 +168,35 @@ wildcards and prompt tooling that the web interface does not provide.
 - **Status bar** — V5 generation credit gauge and Anlas balance
 - **4 languages** — Korean / English / Japanese / Chinese, switchable at runtime
 - **Update check** — the app tells you when a new release is out (can be turned off)
+- **Natural language prompt compiler** — describe a scene in plain language, get it decomposed into
+  Scene/Character/Relationship with bundled tag DB validation (Tools → Natural Language Prompt
+  Compiler, Ctrl+Shift+P)
+
+### Natural Language Prompt Compiler
+
+- Tools → Natural Language Prompt Compiler (Ctrl+Shift+P)
+- Describe the scene you want in plain language; it is decomposed into Scene / Character / Relationship
+- Three modes: Tag / Hybrid (default) / Natural
+- Validates tags against the bundled Danbooru tag DB — tags that do not exist are left out of the final prompt
+- Preview the result, then apply it with Apply / Insert / Replace into the existing editor
+- Character positions (left/right) are reflected automatically on the character position canvas
+
+### LLM provider settings (Options → AI Prompt)
+| Setting | Value |
+|---|---|
+| Provider | OpenAI-compatible (default; llama.cpp / LM Studio / remote) or Ollama |
+| Base URL | http://127.0.0.1:7112/v1 (llama.cpp), http://localhost:11434 (Ollama) |
+| Model | Model name registered on the server |
+
+### Local LLM examples
+- llama.cpp server: `llama-server -m model.gguf --port 7112` → Base URL `http://127.0.0.1:7112/v1`
+- LM Studio: Base URL `http://localhost:1234/v1`
+- Ollama: `ollama run gemma3` → Provider=Ollama, Base URL `http://localhost:11434`
+
+### API keys are separate credentials
+- NovelAI API key (`pst-...`) → image generation. Entered in the login window, kept in the keyring.
+- LLM API key → natural language parsing (only needed for remote providers). Entered in Options → AI Prompt, kept in the keyring.
+- Local LLMs (llama.cpp / Ollama) need no key.
 
 ### Download (Windows)
 

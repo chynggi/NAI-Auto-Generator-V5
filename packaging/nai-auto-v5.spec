@@ -31,6 +31,8 @@ keyring_datas, keyring_binaries, keyring_hiddenimports = collect_all("keyring")
 datas = [
     # (원본, 번들 안 위치) — 앱이 naiauto/resources/... 로 찾는다
     (str(PACKAGE_DIR / "resources"), "naiauto/resources"),
+    # 프롬프트 컴파일러 템플릿 — 앱이 naiauto/core/prompt/templates/*.md 로 찾는다
+    (str(PACKAGE_DIR / "core" / "prompt" / "templates"), "naiauto/core/prompt/templates"),
     *keyring_datas,
 ]
 
