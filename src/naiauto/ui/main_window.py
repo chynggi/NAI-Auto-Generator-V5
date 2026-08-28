@@ -13,6 +13,7 @@ import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import platformdirs
 import shiboken6
@@ -52,6 +53,7 @@ from ..core.i18n.manager import I18nManager
 from ..core.logging_setup import configure_logging, crash_log_path, log_path
 from ..core.metadata.reuse import ReusableSettings
 from ..core.presets import CharacterPromptPreset, GenerationPreset, PresetError, PresetStore
+from ..core.prompt.merge import merge_negatives
 from ..core.resolution_catalog import ResolutionCatalog
 from ..core.settings import credentials
 from ..core.settings.schema import APP_NAME, QUICK_COUNT_SLOTS, AppSettings, CharacterPromptState
@@ -86,6 +88,10 @@ from .widgets.resolution_panel import ResolutionPanel
 from .widgets.status_bar_gauge import StatusBarGauge
 from .widgets.wheel_guard import guard_wheel
 from .widgets.zoomable_image_view import ZoomableImageView
+
+if TYPE_CHECKING:
+    from ..core.prompt.schema import CompiledPrompt
+    from .prompt_compiler_dialog import CompilerApplyPayload, PromptCompilerDialog
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +164,9 @@ class MainWindow(QMainWindow):
         self._logged_in = client.session.is_logged_in
 
         self._qsettings = QSettings()
+
+        #: 마지막으로 연 컴파일러 다이얼로그 (적용 결과 요약에서 _compiled를 읽는다).
+        self._compiler_dialog: PromptCompilerDialog | None = None
 
         self._build_ui()
         self._resize_handle.restore_height()
@@ -275,6 +284,20 @@ class MainWindow(QMainWindow):
         )
         self.ai_section.set_content(self.ai_settings_body)
         left_layout.addWidget(self.ai_section)
+
+        # AI 프롬프트 컴파일러 요약 — 마지막 컴파일 결과를 접어 두고 본다 (스펙 §42 스타일)
+        self.compiler_body = QWidget()
+        compiler_layout = QVBoxLayout(self.compiler_body)
+        self.compiler_summary = QPlainTextEdit()
+        self.compiler_summary.setReadOnly(True)
+        self.compiler_summary.setMaximumHeight(160)
+        self.compiler_open_button = QPushButton()
+        self.compiler_open_button.clicked.connect(self._on_open_compiler)
+        compiler_layout.addWidget(self.compiler_summary)
+        compiler_layout.addWidget(self.compiler_open_button)
+        self.compiler_section = CollapsibleSection(self._i18n, "compiler.section_title")
+        self.compiler_section.set_content(self.compiler_body)
+        left_layout.addWidget(self.compiler_section)
 
         # i2i / 인페인팅 입력 (이미지 없으면 t2i)
         self.image_source = ImageSourceWidget(self._i18n)
@@ -402,6 +425,11 @@ class MainWindow(QMainWindow):
         self.presets_action = self.tools_menu.addAction("")
         self.presets_action.setShortcut("Ctrl+P")
         self.presets_action.triggered.connect(self._on_open_presets)
+
+        # 자연어 → 구조화 프롬프트 컴파일러 (Ctrl+P와 구분되는 Ctrl+Shift+P)
+        self.compiler_action = self.tools_menu.addAction("")
+        self.compiler_action.setShortcut("Ctrl+Shift+P")
+        self.compiler_action.triggered.connect(self._on_open_compiler)
 
         # 폴더 — 자주 여는 세 곳을 바로 연다 (V4와 같은 단축키: F5/F6/F7)
         self.folders_menu = self.menuBar().addMenu("")
@@ -617,6 +645,80 @@ class MainWindow(QMainWindow):
 
         current = target.toPlainText()
         target.setPlainText(append_tags_to_prompt(current, tags))
+
+    # ── 컴파일러 (자연어 → 구조화 프롬프트) ────────────────
+
+    def _on_open_compiler(self) -> None:
+        """자연어 프롬프트 컴파일러 다이얼로그를 연다 (Ctrl+Shift+P).
+
+        적용 원칙 (PLW): 여기서는 편집기를 절대 건드리지 않는다. 다이얼로그가
+        사용자가 Apply/Insert/Replace를 눌렀을 때만 `applied` 시그널로 승인된
+        페이로드를 보내고, 그 경로로만 `_on_compiler_applied`가 적용한다 (§24).
+        """
+        from .prompt_compiler_dialog import PromptCompilerDialog
+
+        dialog = PromptCompilerDialog(self._i18n, self._settings, parent=self)
+        dialog.set_existing_prompt(self.prompt_edit.toPlainText())
+        dialog.applied.connect(self._on_compiler_applied)
+        # exec 전에 보관 — applied 시그널이 exec 안에서 동기적으로 오므로
+        # _on_compiler_applied가 이 다이얼로그의 _compiled를 읽어 요약을 채운다.
+        self._compiler_dialog = dialog
+        dialog.exec()
+
+    def _on_compiler_applied(self, payload: CompilerApplyPayload) -> None:
+        """Apply/Insert/Replace 의미 (스펙 §24).
+
+        적용 원칙: 즉시 overwrite 금지 — 다이얼로그에서 사용자가 Apply/Insert/Replace를
+        눌렀을 때만 이 경로가 온다 (사용자 승인 완료).
+
+        apply   : prompt 교체, negative = merge_negatives(기존, payload.negative_prompt),
+                  캐릭터 = payload.characters로 교체 (load_captions)
+        insert  : prompt = 기존 + ", " + payload.prompt (기존 wildcard/artist combo 유지),
+                  negative = 병합, 캐릭터 = 기존 + payload.characters 추가
+        replace : prompt = payload.prompt, negative = payload.negative_prompt (기존 버림),
+                  캐릭터 = payload.characters로 교체
+        """
+        tr = self._i18n.get_text
+        if payload.mode == "insert":
+            existing = self.prompt_edit.toPlainText().strip()
+            # 순수 문자열 결합 — __wildcard__/{} artist 조합을 파괴하지 않는다 (§51, §52)
+            combined = f"{existing}, {payload.prompt}" if existing else payload.prompt
+            self.prompt_edit.setPlainText(combined)
+            self.negative_edit.setPlainText(
+                merge_negatives(self.negative_edit.toPlainText(), payload.negative_prompt)
+            )
+            merged_characters = (*self.character_prompts.captions(), *payload.characters)
+            self.character_prompts.load_captions(merged_characters)
+            self.status_label.setText(tr("compiler.inserted"))
+        else:
+            self.prompt_edit.setPlainText(payload.prompt)
+            if payload.mode == "replace":
+                # 기존 네거티브는 버린다 (사용자가 검토한 결과물로 완전 교체)
+                self.negative_edit.setPlainText(payload.negative_prompt)
+            else:  # apply — 기존 네거티브는 보존하고 컴파일 것과 중복 없이 병합 (§22)
+                self.negative_edit.setPlainText(
+                    merge_negatives(self.negative_edit.toPlainText(), payload.negative_prompt)
+                )
+            self.character_prompts.load_captions(payload.characters)
+            self.status_label.setText(tr("compiler.applied"))
+
+        # 다이얼로그가 아직 살아 있는 동안(exec 내부 emit) 결과 요약을 채워 둔다.
+        # 테스트가 페이로드만 직접 보내는 경우(_compiler_dialog가 None)에는 그냥 스킵.
+        compiled = getattr(self._compiler_dialog, "_compiled", None)
+        if compiled is not None:
+            self._update_compiler_summary(compiled)
+
+    def _update_compiler_summary(self, compiled: CompiledPrompt) -> None:
+        """마지막 컴파일 결과를 접이식 섹션에 요약 표시 (스펙 §42 스타일)."""
+        lines = [f"Scene: {', '.join(t.tag for t in compiled.scene.tags)}"]
+        for i, c in enumerate(compiled.characters, start=1):
+            lines.append(f"Character {i}: {', '.join(t.tag for t in c.tags)}")
+        if compiled.relationships:
+            lines.append(
+                "Relationship: "
+                + ", ".join(f"{r.source}→{r.target}:{r.action}" for r in compiled.relationships)
+            )
+        self.compiler_summary.setPlainText("\n".join(lines))
 
     # ── 설정 파일 저장 / 불러오기 (V4 방식) ────────────────
 
@@ -1601,6 +1703,8 @@ class MainWindow(QMainWindow):
         self.model_label.setText(tr("ui.model"))
         self.resolution_panel.retranslate()
         self.ai_section.retranslate()
+        self.compiler_open_button.setText(tr("compiler.open_dialog"))
+        self.compiler_section.retranslate()
         self.sampler_label.setText(tr("image_options.sampler"))
         self.scheduler_label.setText(tr("advanced.noise_schedule"))
         self.steps_label.setText(tr("image_options.steps"))
@@ -1641,6 +1745,7 @@ class MainWindow(QMainWindow):
         # M3: WD14 / Presets / Gallery actions
         self.wd14_action.setText(tr("menu.wd14_auto_tag"))
         self.presets_action.setText(tr("menu.presets"))
+        self.compiler_action.setText(tr("menu.prompt_compiler"))
         self.gallery_action.setText(tr("menu.gallery_view"))
         self.folders_menu.setTitle(tr("folders.title"))
         self.open_results_action.setText(tr("folders.results"))
