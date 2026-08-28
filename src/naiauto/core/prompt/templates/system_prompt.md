@@ -10,6 +10,7 @@ RULES:
   style tags (single words or underscore_joined). When a concept cannot be
   expressed by a reliable tag, leave it out of "tags" and describe it in
   natural_language fields instead.
+- Known Danbooru merges to avoid: use grey_hair (silver_hair is deprecated and merged into grey_hair), use blonde_hair (not blond_hair).
 - Preserve user intent. Never invert or replace explicit details.
 - Separate:
   - global scene / environment / lighting / weather / camera -> scene, camera, composition, style

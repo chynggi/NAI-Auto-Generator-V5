@@ -1,0 +1,8 @@
+# NovelAI UC/quality vocabulary absent from danbooru_tags_post_count.csv.
+# These words appear in the app's own NovelAI UC presets / quality tags
+# (core/api/model_specs.py: _UC_45F 등, quality_tags "no text").
+# Captured 2026-08-28. Count is a presence marker, not a post count.
+text[1]
+worst_quality[1]
+bad_quality[1]
+blank_page[1]
