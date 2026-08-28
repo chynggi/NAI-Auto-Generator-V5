@@ -88,6 +88,19 @@ def test_unknown_single_token_not_splittable(resolver):
     assert refs[0].status == "unresolved"
 
 
+def test_hyphenated_db_tag_resolves_directly(resolver):
+    # 하이픈 보존 정규화: DB의 "two-tone_hair"가 그대로 매칭되어야 한다
+    refs = resolver.resolve_phrase("two-tone hair")
+    assert any(r.tag == "two-tone_hair" and r.status == "verified" for r in refs)
+
+
+def test_haired_rule_still_works_with_hyphen_norm(resolver):
+    # 규칙 2 경로 (하이픈→언더스코어 norm)가 여전히 동작
+    refs = resolver.resolve_phrase("silver-haired")
+    assert refs[0].tag == "grey_hair"
+    assert refs[0].status == "verified"
+
+
 def test_resolver_disabled_when_db_missing(tmp_path):
     # 메인 DB 로드 실패 시 보조 파일도 적용하지 않는다 (Ruling #5)
     r = TagResolver(database_path=tmp_path / "nope.csv")

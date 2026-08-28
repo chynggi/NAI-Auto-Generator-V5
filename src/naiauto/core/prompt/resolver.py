@@ -51,14 +51,20 @@ def bundled_extra_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "resources" / "tags" / BUNDLED_EXTRA_NAME
 
 
-def _norm(phrase: str) -> str:
+def _norm(phrase: str, keep_hyphens: bool = False) -> str:
     """후보 문구 → 조회용 정규화명.
 
     [Ruling #5] 소문자 + 하이픈→언더스코어 + 공백→언더스코어 +
     끝단어가 아닌 문장부호 제거. ("silver-haired" → silver_haired)
+
+    ``keep_hyphens=True`` 면 하이픈을 보존한다 (공백만 언더스코어로):
+    DB에 하이픈을 포함한 실제 태그("two-tone_hair", "straight-on")를
+    규칙 1에서 그대로 조회하기 위한 variant다.
     """
     text = phrase.strip().lower().strip(".,;:!?\"'()[]{}")
     text = _TRAILING_PUNCT_RE.sub("", text)
+    if keep_hyphens:
+        return re.sub(r"\s+", "_", text)
     return re.sub(r"[\s-]+", "_", text)
 
 
@@ -147,7 +153,9 @@ class TagResolver:
 
         규칙 (순서대로):
         1. 정규화(norm): 소문자, 공백/하이픈→언더스코어, 끝단어가 아닌 문장부호
-           제거. DB 존재 → TagRef(norm, "verified", post_count=DB값)
+           제거. DB 존재 → TagRef(norm, "verified", post_count=DB값). 하이픈
+           보존 variant(keep_hyphens)도 함께 조회한다 — DB의 "two-tone_hair",
+           "straight-on" 같은 실존 하이픈 태그가 rule 1에서 잡혀야 한다.
         1.5 alias 확인: norm(또는 변형 규칙 2/3의 후보)이 ALIASES에 있으면
             canonical 태그로 대체해 DB 존재 확인 (silver_hair → grey_hair)
         2. "{stem}_haired" → DB에 "{stem}_hair" 존재하면 verified (alias 경유 포함)
@@ -166,10 +174,15 @@ class TagResolver:
         if not self._enabled:
             return (TagRef(tag=norm, status="unresolved", post_count=0),)
 
-        # 규칙 1 + 1.5: 정규화명 그대로 DB 조회 (alias 경유 포함)
-        entry = self._lookup(norm)
-        if entry is not None:
-            return (self._verified_ref(entry),)
+        # 규칙 1 + 1.5: 정규화 후보(하이픈 언더스코어화/보존) 순회해 DB 조회 (alias 경유 포함)
+        candidates = [norm]
+        hyphens_kept = _norm(phrase, keep_hyphens=True)
+        if hyphens_kept != norm:
+            candidates.append(hyphens_kept)
+        for candidate in candidates:
+            entry = self._lookup(candidate)
+            if entry is not None:
+                return (self._verified_ref(entry),)
 
         # 규칙 2: _haired/_eyed 변형
         refs = self._resolve_suffix_variant(norm)
