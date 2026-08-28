@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.5"]
+dev = ["ruff>=0.5", "pytest>=8.0"]
 
 [project.gui-scripts]
 nai-auto-v5 = "naiauto.ui.app:main"
@@ -42,3 +42,7 @@ src = ["src"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
