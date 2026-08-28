@@ -964,6 +964,8 @@ git commit -m "feat(prompt): add LLM system prompt template and scene parser"
 
 **Files:**
 - Create: `src/naiauto/core/prompt/resolver.py`
+- Create: `src/naiauto/resources/tags/danbooru_tags_extra.csv` — [Ruling #5] NAI UC 어휘 보조 파일
+- Modify: `src/naiauto/core/prompt/templates/system_prompt.md` — [Ruling #5] deprecation 1줄 추가
 - Test: `tests/test_resolver.py`
 
 **Interfaces:**
@@ -977,6 +979,15 @@ class TagResolver:
     결정적(deterministic) 검증만 한다 — LLM은 후보만 내고, 여기서 실제 tag인지
     판정한다. DB에 없는 태그는 status="unresolved" TagRef 하나로 돌려주며
     final prompt에 넣지 않는다 (스펙 §10, §41).
+
+    [Ruling #5 적용] 메인 DB(동봉 또는 사용자 지정)와 별도로 내장 보조 파일
+    `danbooru_tags_extra.csv`를 로드한다 — Danbooru 추출본에 없지만 NovelAI
+    UC/quality 어휘에 속하는 소수 단어(text, worst_quality, bad_quality,
+    blank_page)만 담겨 있다. 보조 파일은 메인 DB 로드가 성공했을 때만 병합된다.
+
+    [Ruling #5 적용] 알려진 Danbooru 병합/철자 변형은 alias 사전으로 정규화한다:
+    silver_hair→grey_hair (Danbooru에서 deprecated·병합됨),
+    blond_hair→blonde_hair (canonical 철자). alias는 토큰 분해보다 먼저 적용된다.
     """
     def __init__(self, database_path: Path | None = None) -> None:
         # None → bundled_database_path()
@@ -989,20 +1000,29 @@ class TagResolver:
         """하나의 후보 문구 → 1..n개의 검증된 TagRef.
 
         규칙 (순서대로):
-        1. 정규화(norm): 소문자, 공백→언더스코어, 끝단어가 아닌 문장부호 제거.
-           DB 존재 → TagRef(norm, "verified", post_count=DB값)
-        2. "{stem}_haired" → DB에 "{stem}_hair" 존재하면 verified
+        1. 정규화(norm): 소문자, 공백→언더스코어, 하이픈→언더스코어,
+           끝단어가 아닌 문장부호 제거. DB 존재 → TagRef(norm, "verified", post_count=DB값)
+        1.5 alias 확인: norm(또는 변형 규칙 2/3의 후보)이 ALIASES에 있으면
+            canonical 태그로 대체해 DB 존재 확인 (silver_hair → grey_hair)
+        2. "{stem}_haired" → DB에 "{stem}_hair" 존재하면 verified (alias 경유 포함)
            "{stem}_eyed"  → DB에 "{stem}_eyes" 존재하면 verified
-        3. [Pre-flight ruling #3] "{a}_{b}_hair" / "{a}_{b}_eyes" 형태의 복합 신체 속성:
-           norm이 "_hair"/"_eyes"로 끝나면 접두어 부분을 '_'로 분리해 각 단어에
-           "_hair"/"_eyes"를 붙여 DB 존재를 확인한다. 하나 이상 존재하면 그 refs를
-           반환한다 (예: "long black hair" → "long_black_hair" → long_hair, black_hair).
-           단어 "bob"은 "bob_cut"으로 매핑 시도 ("short bob hair" → short_hair, bob_cut).
-        4. 일반 다중 토큰: 공백 분리한 각 토큰을 개별 norm→DB 조회.
-           전부 verified면 TagRef 목록 반환 (source="inferred")
+        3. "{a}_{b}_hair" / "_eyes" 복합 신체 속성: 접두어를 '_'로 분리해 각 단어에
+           접미사를 붙여 DB 존재 확인 (alias 경유 포함) — 하나 이상 존재하면 그 refs
+           반환 ("long black hair" → long_hair, black_hair). 단어 "bob" → "bob_cut".
+        4. 일반 다중 토큰: norm을 공백 또는 '_'로 분리한 각 토큰을 개별 DB 조회
+           ("wet_road" → wet, road). 전부 verified면 목록 반환 (source="inferred")
            하나라도 실패하면 전체를 unresolved(전체 정규화명) 하나로 반환
         5. 어느 것도 못 찾으면 TagRef(norm, "unresolved", post_count=0) 하나 반환
         """
+
+ALIASES: dict[str, str] = {
+    # [Ruling #5] Danbooru 태그 병합/철자 정규화 (2026-08-28 확인)
+    "silver_hair": "grey_hair",    # Danbooru에서 deprecated → grey_hair로 통합
+    "blond_hair": "blonde_hair",   # canonical 철자는 blonde_hair
+}
+
+def bundled_extra_path() -> Path:
+    """내장 보조 태그 파일 (NAI UC 어휘) — danbooru_tags_extra.csv"""
 ```
 
 **마스킹 규칙:** norm 정규화 정확한 정의:
@@ -1033,22 +1053,30 @@ def resolver(bundled_db_path):
     return r
 
 
-def test_silver_hair(resolver):
+def test_silver_hair_aliases_to_grey_hair(resolver):
+    # [Ruling #5] Danbooru에서 silver_hair는 deprecated — grey_hair가 canonical
     refs = resolver.resolve_phrase("silver hair")
     assert len(refs) == 1
-    assert refs[0].tag == "silver_hair"
+    assert refs[0].tag == "grey_hair"
     assert refs[0].status == "verified"
     assert refs[0].post_count > 0
 
 
 def test_underscore_input_ok(resolver):
     refs = resolver.resolve_phrase("silver_hair")
-    assert refs[0].tag == "silver_hair"
+    assert refs[0].tag == "grey_hair"
 
 
 def test_capitalized_and_punctuated(resolver):
     refs = resolver.resolve_phrase("Silver Hair,")
-    assert refs[0].tag == "silver_hair"
+    assert refs[0].tag == "grey_hair"
+
+
+def test_blond_hair_aliases_to_blonde_hair(resolver):
+    # [Ruling #5] canonical 철자는 blonde_hair
+    refs = resolver.resolve_phrase("blond hair")
+    assert refs[0].tag == "blonde_hair"
+    assert refs[0].status == "verified"
 
 
 def test_long_black_hair_splits_into_parts(resolver):
@@ -1060,13 +1088,28 @@ def test_long_black_hair_splits_into_parts(resolver):
 
 def test_haired_variant_rule(resolver):
     refs = resolver.resolve_phrase("silver-haired")
-    assert refs[0].tag == "silver_hair"
+    assert refs[0].tag == "grey_hair"
     assert refs[0].status == "verified"
 
 
 def test_eyed_variant_rule(resolver):
     refs = resolver.resolve_phrase("red-eyed")
     assert any(r.tag == "red_eyes" and r.status == "verified" for r in refs)
+
+
+def test_underscore_compound_splits_into_tokens(resolver):
+    # [Ruling #5] "wet_road" → wet + road (둘 다 DB에 존재)
+    refs = resolver.resolve_phrase("wet_road")
+    tags = {r.tag for r in refs}
+    assert {"wet", "road"} <= tags
+    assert all(r.status == "verified" for r in refs)
+
+
+def test_nai_negative_vocabulary_verified(resolver):
+    # [Ruling #5] 보조 파일(danbooru_tags_extra.csv)의 NAI UC 어휘
+    refs = resolver.resolve_phrase("text")
+    assert refs[0].tag == "text"
+    assert refs[0].status == "verified"
 
 
 def test_nonexistent_tag_is_unresolved(resolver):
@@ -1089,6 +1132,7 @@ def test_unknown_single_token_not_splittable(resolver):
 
 
 def test_resolver_disabled_when_db_missing(tmp_path):
+    # 메인 DB 로드 실패 시 보조 파일도 적용하지 않는다 (Ruling #5)
     r = TagResolver(database_path=tmp_path / "nope.csv")
     assert r.load() is False
     assert r.is_enabled is False
@@ -1097,14 +1141,36 @@ def test_resolver_disabled_when_db_missing(tmp_path):
 
 - [ ] **Step 2: 실패 확인**
 
-- [ ] **Step 3: 구현** — 위 규칙대로. `resolve_phrase`가 비활성 상태(load 실패)면 전부 unresolved 처리. 주의: `post_count`는 `TagEntry.post_count`.
+- [ ] **Step 2.5: [Ruling #5] 보조 태그 파일 + 시스템 프롬프트 보강**
 
-- [ ] **Step 4: 통과 확인** — `11 passed`
+`src/naiauto/resources/tags/danbooru_tags_extra.csv` (정확히 이 내용 — `#` 주석 줄은 두 로더 모두 안전하게 건너뛴다):
+
+```csv
+# NovelAI UC/quality vocabulary absent from danbooru_tags_post_count.csv.
+# These words appear in the app's own NovelAI UC presets / quality tags
+# (core/api/model_specs.py: _UC_45F 등, quality_tags "no text").
+# Captured 2026-08-28. Count is a presence marker, not a post count.
+text[1]
+worst_quality[1]
+bad_quality[1]
+blank_page[1]
+```
+
+`system_prompt.md`의 RULES 블록에 한 줄 추가 (영어, 기존 문체 유지):
+
+```markdown
+- Known Danbooru merges to avoid: use grey_hair (silver_hair is deprecated
+  and merged into grey_hair), use blonde_hair (not blond_hair).
+```
+
+- [ ] **Step 3: 구현** — 위 인터페이스/규칙 블록 그대로. `load()`는 `parse_tag_line`/`bundled_database_path`/`resolve_database_path`를 재사용해 메인 파일을 읽고, **메인 로드 성공 시에만** `bundled_extra_path()`의 보조 파일을 병합한다. 정규화는 소문자 + 하이픈→언더스코어 + 공백→언더스코어 + 끝단어가 아닌 문장부호 제거. alias(`ALIASES`)는 규칙 1·2·3의 DB 존재 확인 시 canonical 변환 경로로 적용 (규칙 4 토큰 분해보다 먼저).
+
+- [ ] **Step 4: 통과 확인** — `12 passed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/naiauto/core/prompt/resolver.py tests/test_resolver.py
+git add src/naiauto/core/prompt/resolver.py src/naiauto/resources/tags/danbooru_tags_extra.csv src/naiauto/core/prompt/templates/system_prompt.md tests/test_resolver.py
 git commit -m "feat(prompt): add deterministic Danbooru tag resolver"
 ```
 
@@ -1789,17 +1855,18 @@ def test_golden_example_hybrid(golden_input):
     compiled = _compiler().compile(golden_input, mode="hybrid")
     # base에 scene + count
     assert compiled.base_prompt.startswith("2girls")
-    for tag in ("city", "night", "rain", "wet_road", "neon_lights"):
+    # [Ruling #5] "wet_road"는 토큰 분해로 wet + road (둘 다 DB 존재), "silver_hair"는 grey_hair로 정규화
+    for tag in ("city", "night", "rain", "wet", "road", "neon_lights"):
         assert tag in compiled.base_prompt
     # 캐릭터 분리
     assert len(compiled.characters) == 2
     c1, c2 = compiled.characters
-    assert any(t.tag == "silver_hair" for t in c1.tags)
+    assert any(t.tag == "grey_hair" for t in c1.tags)
     assert any(t.tag == "black_dress" for t in c1.tags)
     assert any(t.tag == "red_hair" for t in c2.tags)
     assert any(t.tag == "umbrella" for t in c2.tags)
     # 캐릭터 태그가 base에 없고, scene 태그가 캐릭터에 없음 (스펙 §74 핵심)
-    assert "silver_hair" not in compiled.base_prompt
+    assert "grey_hair" not in compiled.base_prompt
     assert "rain" not in "".join(t.tag for t in c1.tags)
     # 관계는 별도 구조로 보존
     assert len(compiled.relationships) == 2
