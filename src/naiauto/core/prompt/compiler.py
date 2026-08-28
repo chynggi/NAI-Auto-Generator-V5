@@ -16,7 +16,6 @@ formatter(문자열 조립)를 순서대로 묶어 최종 ``CompiledPrompt``를 
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 from naiauto.core.prompt.errors import CompilerEmptyResultError
@@ -36,6 +35,7 @@ from naiauto.core.prompt.schema import (
     TagRef,
 )
 from naiauto.core.settings.credentials import load_credential
+from naiauto.core.tag_completer import resolve_database_path
 
 __all__ = ["PromptCompiler", "build_compiler"]
 
@@ -226,7 +226,6 @@ def build_compiler(settings) -> PromptCompiler:
     API 키는 keyring(``core.settings.credentials``)에서 ``API_KEY_CREDENTIAL``
     키로 읽는다 — keyring을 쓸 수 없는 환경에서는 빈 키로 동작한다.
     provider 설정 미완료(예: ollama인데 model 비어 있음)는 기본값으로 보정한다.
-    (Task 10에서 PromptAISettings/CompilerSettings 실필드에 연결)
     """
     ai = getattr(settings, "prompt_ai", None)
     comp = getattr(settings, "compiler", None)
@@ -252,7 +251,8 @@ def build_compiler(settings) -> PromptCompiler:
 
     use_resolver = bool(getattr(comp, "use_danbooru_resolver", True))
     db_path = getattr(settings, "tag_database_path", "") or None
-    resolver = TagResolver(database_path=Path(db_path) if db_path else None)
+    # 빈 설정 = 앱에 동봉된 기본 태그 DB로 해석 (TagResolver.load도 같은 규칙을 쓴다).
+    resolver = TagResolver(database_path=resolve_database_path(db_path))
     if use_resolver:
         resolver.load()  # 실패 시 내부적으로 비활성
 

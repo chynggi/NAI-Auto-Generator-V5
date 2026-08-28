@@ -72,6 +72,7 @@ NAV_ORDER: tuple[str, ...] = (
     PAGE_GENERATION,
     PAGE_RESOLUTION,
     "interface",
+    "prompt_ai",
     "tags",
     "log",
 )
@@ -107,6 +108,8 @@ OWNED_FIELDS: tuple[str, ...] = (
     "batch.quick_counts",
     "resolution",
     "ui",
+    "prompt_ai",
+    "compiler",
 )
 
 __all__ = ["NAV_ORDER", "NAV_WIDTH", "OWNED_FIELDS", "OptionsDialog", "apply_draft"]

@@ -128,6 +128,27 @@ class PromptFontSettings(BaseModel):
     deemphasis_color: str = ""  # "" = 기본 고정색 (가중치 < 1.0, 예: "-2::text::")
 
 
+class PromptAISettings(BaseModel):
+    """LLM provider 설정 (스펙 §46). api_key는 설정 파일에 저장하지 않는다 — keyring."""
+
+    provider: str = "openai_compatible"          # "openai_compatible" | "ollama"
+    base_url: str = "http://127.0.0.1:7112/v1"   # llama.cpp 로컬 서버 (OpenAI 호환)
+    model: str = ""
+    timeout_seconds: float = 120.0
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    api_key_available: bool = False              # keyring에 key가 저장되어 있는가 (표시용)
+
+
+class CompilerSettings(BaseModel):
+    """Prompt Compiler 기본값 (스펙 §46)."""
+
+    default_mode: str = "hybrid"                 # "tag" | "hybrid" | "natural"
+    use_danbooru_resolver: bool = True
+    preserve_natural_language: bool = True
+    relationship_style: str = "natural"          # "natural" | "tag"
+
+
 class AppSettings(BaseModel):
     schema_version: int = CURRENT_SCHEMA_VERSION
     language: str = "ko"
@@ -158,6 +179,8 @@ class AppSettings(BaseModel):
     resolution: ResolutionOptions = Field(default_factory=ResolutionOptions)
     ui: UiState = Field(default_factory=UiState)
     prompt_font: PromptFontSettings = Field(default_factory=PromptFontSettings)
+    prompt_ai: PromptAISettings = Field(default_factory=PromptAISettings)
+    compiler: CompilerSettings = Field(default_factory=CompilerSettings)
 
     def log_dir_path(self) -> Path:
         """설정된 로그 디렉터리. 빈 문자열이면 OS 표준 위치."""
