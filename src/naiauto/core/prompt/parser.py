@@ -41,6 +41,19 @@ _TEMPLATE_PATH = Path(__file__).parent / "templates" / "system_prompt.md"
 #: 단일 중괄호 토큰. 수정 모드에서 제거되면 안 되는 원본 프롬프트 조각.
 PRESERVED_TOKEN_RE = re.compile(r"(__[\w=\-]+__|\{[^{}]*\})")
 
+#: 한국어 등 비영문 자연어 → 영문 태그 검색 키워드 번역용 시스템 프롬프트.
+_TRANSLATE_SYSTEM = (
+    "You are a translation helper for an image generation prompt tool.\n"
+    "Translate the user's image description into English keywords suitable for "
+    "Danbooru tag search. Keep character details, scene elements, and style "
+    "terms.\n"
+    "Output ONLY the English translation. No commentary, no quotes, no markdown."
+)
+
+#: 번역 호출용 파라미터 — 검색 키워드만 필요하므로 짧고 결정적으로.
+_TRANSLATE_TEMPERATURE = 0.0
+_TRANSLATE_MAX_TOKENS = 200
+
 
 def load_system_prompt() -> str:
     """templates/system_prompt.md 내용을 읽는다.
@@ -118,13 +131,24 @@ def build_messages(
     *,
     existing_prompt: str = "",
     preserved: tuple[str, ...] = (),
+    candidate_tags: tuple[str, ...] = (),
+    translated_text: str = "",
 ) -> list[dict[str, str]]:
     """LLM 호출용 system/user 메시지 목록을 구성한다.
 
     - 생성 모드(``existing_prompt`` 비어있음): user = 원문 그대로.
     - 수정 모드: 기존 프롬프트·보존 토큰·수정 요청을 한 user 메시지로 조립.
+    - ``candidate_tags``(RAG 검색 결과)가 있으면 시스템 프롬프트 끝에
+      "AVAILABLE TAGS" 섹션으로 주입한다 — LLM이 실존 태그를 고르도록.
+    - ``translated_text``(선번역 결과)가 있으면 user 메시지에 병기한다 —
+      LLM이 비영문 원문을 이해하는 것을 돕는다.
     """
     system = load_system_prompt()
+    if candidate_tags:
+        system = (
+            f"{system}\n\nAVAILABLE TAGS (use these exact tag names when they fit "
+            f"the description):\n{', '.join(candidate_tags)}"
+        )
     if existing_prompt:
         user = (
             "EXISTING PROMPT:\n"
@@ -136,6 +160,8 @@ def build_messages(
         )
     else:
         user = text
+    if translated_text:
+        user = f"{user}\n\nTRANSLATED QUERY (English, for reference):\n{translated_text}"
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -167,13 +193,21 @@ class SceneParser:
         *,
         existing_prompt: str = "",
         preserved: tuple[str, ...] = (),
+        candidate_tags: tuple[str, ...] = (),
+        translated_text: str = "",
     ) -> LLMStructuredPrompt:
         """자연어를 LLM에 보내 구조화 프롬프트로 파싱한다.
 
+        ``candidate_tags``(RAG 검색 결과)는 시스템 프롬프트에, ``translated_text``
+        (선번역 결과)는 user 메시지에 주입된다.
         빈 응답 → ``CompilerEmptyResultError``.
         """
         messages = build_messages(
-            text, existing_prompt=existing_prompt, preserved=preserved
+            text,
+            existing_prompt=existing_prompt,
+            preserved=preserved,
+            candidate_tags=candidate_tags,
+            translated_text=translated_text,
         )
         response = self.provider.chat(
             messages,
@@ -184,3 +218,22 @@ class SceneParser:
         if not response.strip():
             raise CompilerEmptyResultError("LLM returned an empty response")
         return parse_structured(response)
+
+    def translate(self, text: str) -> str:
+        """비영문 자연어를 영문 태그 검색 키워드로 번역한다.
+
+        실패/빈 응답 → 빈 문자열 (호출자가 폴백 처리).
+        """
+        if not text.strip():
+            return ""
+        messages = [
+            {"role": "system", "content": _TRANSLATE_SYSTEM},
+            {"role": "user", "content": text},
+        ]
+        response = self.provider.chat(
+            messages,
+            temperature=_TRANSLATE_TEMPERATURE,
+            max_tokens=_TRANSLATE_MAX_TOKENS,
+            timeout=self.timeout,
+        )
+        return response.strip()

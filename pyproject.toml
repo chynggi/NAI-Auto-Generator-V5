@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.5", "pytest>=8.0"]
+wd14 = ["onnxruntime>=1.18"]
 
 [project.gui-scripts]
 nai-auto-v5 = "naiauto.ui.app:main"

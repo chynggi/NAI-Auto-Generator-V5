@@ -14,6 +14,7 @@ core/ 모듈이므로 Qt 의존성이 없다.
 
 from __future__ import annotations
 
+import csv
 import logging
 import re
 from pathlib import Path
@@ -28,16 +29,25 @@ from naiauto.core.tag_completer import (
 logger = logging.getLogger(__name__)
 
 #: norm 정규화에서 끝단어가 아닌 문장부호 — 끝에 붙은 구두점만 자른다.
-_TRAILING_PUNCT_RE = re.compile(r"[^A-Za-z0-9_]+$")
+#: 괄호는 캐릭터/시리즈 태그명("hiyori_(blue_archive)")의 일부이므로 제외.
+_TRAILING_PUNCT_RE = re.compile(r"[^A-Za-z0-9_()]+$")
 
 #: [Ruling #5] Danbooru 태그 병합/철자 정규화 (2026-08-28 확인).
 ALIASES: dict[str, str] = {
     "silver_hair": "grey_hair",    # Danbooru에서 deprecated → grey_hair로 통합
     "blond_hair": "blonde_hair",   # canonical 철자는 blonde_hair
+    "indoor": "indoors",           # canonical은 indoors (indoor는 실존하지 않음)
+    "farting": "fart",             # Danbooru에서 병합 (farting → fart)
+    "flatulence": "fart",          # Danbooru에 없는 LLM 습관 단어 → canonical
+    "back_view": "from_behind",    # deprecated → from_behind로 통합
+    "hand_on_buttocks": "hand_on_own_ass",  # LLM 습관 형태 → canonical (동봉 CSV 보강됨)
 }
 
 #: 내장 보조 태그 파일 이름 (NAI UC 어휘).
 BUNDLED_EXTRA_NAME = "danbooru_tags_extra.csv"
+
+#: 내장 alias 파일 이름 (Danbooru 공식 alias, deepghs/site_tags + HDiffusion 병합).
+BUNDLED_ALIASES_NAME = "danbooru_aliases.csv"
 
 #: "{stem}_haired" → "{stem}_hair", "{stem}_eyed" → "{stem}_eyes" 변형 규칙.
 _SUFFIX_RULES = (
@@ -51,6 +61,11 @@ def bundled_extra_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "resources" / "tags" / BUNDLED_EXTRA_NAME
 
 
+def bundled_aliases_path() -> Path:
+    """내장 alias 파일 (Danbooru 공식) — danbooru_aliases.csv"""
+    return Path(__file__).resolve().parent.parent.parent / "resources" / "tags" / BUNDLED_ALIASES_NAME
+
+
 def _norm(phrase: str, keep_hyphens: bool = False) -> str:
     """후보 문구 → 조회용 정규화명.
 
@@ -61,7 +76,7 @@ def _norm(phrase: str, keep_hyphens: bool = False) -> str:
     DB에 하이픈을 포함한 실제 태그("two-tone_hair", "straight-on")를
     규칙 1에서 그대로 조회하기 위한 variant다.
     """
-    text = phrase.strip().lower().strip(".,;:!?\"'()[]{}")
+    text = phrase.strip().lower().strip(".,;:!?\"'[]{}")
     text = _TRAILING_PUNCT_RE.sub("", text)
     if keep_hyphens:
         return re.sub(r"\s+", "_", text)
@@ -90,6 +105,9 @@ class TagResolver:
         self._database_path = database_path
         self._db: dict[str, TagEntry] = {}
         self._enabled = False
+        #: alias 맵 (deprecated/옛 이름 → canonical). 상수 ALIASES에 동봉
+        #: danbooru_aliases.csv(공식 5만+)를 병합한다 — 파일이 우선.
+        self._aliases: dict[str, str] = dict(ALIASES)
 
     def load(self) -> bool:
         """태그 DB를 읽어 메모리에 적재한다. 실패(없음/손상) 시 False.
@@ -136,6 +154,17 @@ class TagResolver:
         self._db = entries
         self._enabled = True
         logger.info("Loaded %d tags from %s (+ extra)", len(entries), path)
+
+        # [alias 파일] 공식 alias(danbooru_aliases.csv)를 상수 ALIASES에 병합.
+        # 파일이 우선 — 실패해도 치명적이지 않다 (상수만으로 동작).
+        try:
+            with bundled_aliases_path().open(encoding="utf-8", newline="") as f:
+                for row in csv.reader(f):
+                    alias, canonical = row[0].strip(), row[1].strip() if len(row) > 1 else ""
+                    if alias and canonical and canonical != "tag":  # 헤더 "alias,tag" 제외
+                        self._aliases[alias] = canonical
+        except OSError as e:
+            logger.warning("Cannot read alias file (ignored): %s", e)
         return True
 
     @property
@@ -207,7 +236,7 @@ class TagResolver:
     # ------------------------------------------------------------------
 
     def _lookup(self, name: str) -> TagEntry | None:
-        """DB 조회 — [Ruling #5] alias(canonical 변환) 경유 포함.
+        """DB 조회 — alias(상수 + 동봉 파일, canonical 변환) 경유 포함.
 
         규칙 1·2·3의 후보에만 적용된다. 규칙 4(토큰 분해)에는 alias를
         적용하지 않는다 (토큰 분해보다 alias가 먼저이기 때문).
@@ -215,7 +244,7 @@ class TagResolver:
         entry = self._db.get(name)
         if entry is not None:
             return entry
-        canonical = ALIASES.get(name)
+        canonical = self._aliases.get(name)
         return self._db.get(canonical) if canonical else None
 
     def _verified_ref(self, entry: TagEntry, source: str = "explicit") -> TagRef:

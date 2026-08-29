@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -39,6 +40,11 @@ from naiauto.core.prompt.errors import (
     CompilerParseError,
     CompilerServerError,
     CompilerTimeoutError,
+)
+from naiauto.core.prompt.history import (
+    InputHistoryEntry,
+    PromptInputHistory,
+    default_history_path,
 )
 from naiauto.core.prompt.merge import to_generation_data
 from naiauto.core.prompt.schema import DEFAULT_MODE, MODE_TAGS, CompiledPrompt
@@ -106,6 +112,7 @@ class PromptCompilerDialog(QDialog):
         settings: AppSettings,
         *,
         parent: QWidget | None = None,
+        history: PromptInputHistory | None = None,
     ) -> None:
         super().__init__(parent)
         self._i18n = i18n
@@ -117,6 +124,10 @@ class PromptCompilerDialog(QDialog):
         self._last_run: _ConvertInputs | None = None
         self._cancel_requested = False
         self._subscribed = True
+        #: 최근 입력 히스토리 (주입 없으면 기본 경로 사용). 입력만 저장 — 출력은 캐싱하지 않는다.
+        self._history = history if history is not None else PromptInputHistory(path=default_history_path())
+        self._history.load()
+        self._history_restoring = False
 
         self.setMinimumSize(720, 560)
         self._build_ui()
@@ -155,6 +166,16 @@ class PromptCompilerDialog(QDialog):
         control_row.addWidget(self.cancel_button)
         control_row.addWidget(self.regenerate_button)
         layout.addLayout(control_row)
+
+        # 최근 입력 히스토리 행 — 선택 시 해당 탭/필드로 복원 (자동 변환은 하지 않음)
+        history_row = QHBoxLayout()
+        self._history_label = QLabel()
+        history_row.addWidget(self._history_label)
+        self._history_combo = QComboBox()
+        self._history_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self._history_combo.currentIndexChanged.connect(self._on_history_selected)
+        history_row.addWidget(self._history_combo, stretch=1)
+        layout.addLayout(history_row)
 
         # 입력 탭
         self._tabs = QTabWidget()
@@ -245,6 +266,8 @@ class PromptCompilerDialog(QDialog):
         self.insert_button.setText(tr("compiler.insert"))
         self.replace_button.setText(tr("compiler.replace"))
         self.close_button.setText(tr("dialogs.cancel"))
+        self._history_label.setText(tr("compiler.recent_inputs"))
+        self._refresh_history_combo()  # 플레이스홀더 문구도 현재 언어로 갱신
 
     def _on_language_changed(self, _code: str) -> None:
         self.retranslate()
@@ -257,6 +280,10 @@ class PromptCompilerDialog(QDialog):
 
     def done(self, result: int) -> None:
         self._unsubscribe()
+        # 내장 추론 모델(예: LlamaCppProvider)이 있으면 VRAM 해제 — 비상주 요구.
+        close = getattr(self._compiler, "close", None)
+        if callable(close):
+            close()
         super().done(result)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 이름
@@ -374,9 +401,67 @@ class PromptCompilerDialog(QDialog):
         self._compiled = compiled
         self._render_preview(compiled)
         self._set_result_buttons(True)
+        self._record_history()
 
     def _on_converted_cancelled(self) -> None:
         self._set_conversion_idle()
+
+    # ------------------------------------------------------------------
+    # 최근 입력 히스토리
+    # ------------------------------------------------------------------
+
+    def _record_history(self) -> None:
+        """성공한 변환의 입력 스냅샷을 히스토리에 기록하고 콤보를 갱신한다."""
+        if self._last_run is None:
+            return
+        self._history.add(self._to_history_entry(self._last_run))
+        self._refresh_history_combo()
+
+    def _to_history_entry(self, inputs: _ConvertInputs) -> InputHistoryEntry:
+        """워커 입력 스냅샷 → 히스토리 항목."""
+        return InputHistoryEntry(
+            tab="modify" if inputs.modify else "create",
+            text=inputs.text,
+            existing_prompt=inputs.existing,
+            instruction=inputs.instruction,
+            mode=inputs.mode,
+            ts=time.time(),
+        )
+
+    def _refresh_history_combo(self) -> None:
+        """플레이스홀더 + 최근 입력 목록으로 콤보를 다시 채운다 (시그널 차단)."""
+        self._history_restoring = True
+        try:
+            self._history_combo.blockSignals(True)
+            self._history_combo.clear()
+            self._history_combo.addItem(self._i18n.get_text("compiler.recent_placeholder"), None)
+            for entry in self._history.recent():
+                label = entry.instruction if entry.tab == "modify" else entry.text
+                if not label.strip():
+                    label = entry.existing_prompt or "—"
+                self._history_combo.addItem(label, entry)
+            self._history_combo.setCurrentIndex(0)
+        finally:
+            self._history_combo.blockSignals(False)
+            self._history_restoring = False
+
+    def _on_history_selected(self, index: int) -> None:
+        """최근 입력 선택 → 해당 탭/입력 필드/모드를 복원한다 (자동 실행 없음)."""
+        if self._history_restoring:
+            return
+        entry = self._history_combo.itemData(index)
+        if entry is None:
+            return
+        if entry.tab == "modify":
+            self._tabs.setCurrentWidget(self._modify_tab)
+            self._existing_edit.setPlainText(entry.existing_prompt)
+            self._instruction_edit.setPlainText(entry.instruction)
+        else:
+            self._tabs.setCurrentWidget(self._input_tab)
+            self._input_edit.setPlainText(entry.text)
+        index = self.mode_combo.findData(entry.mode)
+        if index >= 0:
+            self.mode_combo.setCurrentIndex(index)
 
     def _set_conversion_idle(self) -> None:
         """변환 종료(성공/실패/취소) 후 컨트롤을 복구한다."""

@@ -237,3 +237,208 @@ def test_invalid_mode_raises_value_error():
         _compiler().compile("테스트", mode="bogus")
     with pytest.raises(ValueError, match="invalid mode"):
         _compiler().modify("1girl", "옥상으로 바꿔줘", mode="bogus")
+
+
+def test_compiler_close_releases_embedded_provider():
+    # 내장 추론(예: LlamaCppProvider)의 close()를 컴파일러 종료 시 호출해 VRAM을 반환한다
+    closed = []
+
+    class ClosingProvider(FakeLLMProvider):
+        def close(self):
+            closed.append(True)
+
+    resolver = TagResolver()
+    assert resolver.load()
+    compiler = PromptCompiler(
+        provider=ClosingProvider(response=GOLDEN_JSON),
+        resolver=resolver,
+        formatter=PromptFormatter(),
+    )
+    compiler.close()
+    assert closed == [True]
+
+
+def test_compiler_close_without_provider_close_is_noop():
+    # close()가 없는 provider(HTTP 등)는 그냥 무시
+    _compiler().close()
+
+
+def test_build_compiler_auto_starts_server(monkeypatch):
+    # openai_compatible + auto_start_server → 서버 매니저 생성 + 기존 서버 재사용
+    from types import SimpleNamespace
+
+    import requests
+
+    from naiauto.core.prompt.compiler import build_compiler
+
+    class _OkResponse:
+        status_code = 200
+
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: _OkResponse())
+
+    settings = SimpleNamespace(
+        prompt_ai=SimpleNamespace(
+            provider="openai_compatible",
+            base_url="http://127.0.0.1:7999/v1",
+            model="m",
+            auto_start_server=True,
+            server_path="/tmp/x/llama-server",
+            server_args="-m m.gguf",
+            temperature=0.3,
+            max_tokens=2048,
+            timeout_seconds=120,
+            model_path="", n_ctx=16384, n_gpu_layers=99, n_cpu_moe=0, expert_hot_s=0,
+        ),
+        compiler=SimpleNamespace(
+            use_danbooru_resolver=True,
+            preserve_natural_language=True,
+            relationship_style="natural",
+        ),
+        tag_database_path="",
+    )
+    compiler = build_compiler(settings)
+    assert compiler._server_manager is not None
+    assert compiler._server_manager._proc is None  # 기존 서버 재사용 — 새로 안 띄움
+    compiler.close()  # 예외 없음
+
+
+def test_build_compiler_no_server_manager_by_default():
+    from types import SimpleNamespace
+
+    from naiauto.core.prompt.compiler import build_compiler
+
+    settings = SimpleNamespace(
+        prompt_ai=SimpleNamespace(
+            provider="llama_cpp",
+            base_url="", model="",
+            auto_start_server=False, server_path="", server_args="",
+            model_path="/tmp/x/model.gguf",
+            temperature=0.3, max_tokens=2048, timeout_seconds=120,
+            n_ctx=16384, n_gpu_layers=99, n_cpu_moe=0, expert_hot_s=0,
+        ),
+        compiler=SimpleNamespace(
+            use_danbooru_resolver=True,
+            preserve_natural_language=True,
+            relationship_style="natural",
+        ),
+        tag_database_path="",
+    )
+    compiler = build_compiler(settings)
+    assert compiler._server_manager is None  # llama_cpp 내장 추론은 서버 불필요
+
+
+def test_compile_injects_retrieved_tags_into_system_prompt():
+    # RAG: 자연어의 영문 키워드 → DB 후보 태그 → 시스템 프롬프트 AVAILABLE TAGS
+    from naiauto.core.prompt.retriever import TagRetriever
+
+    seen = {}
+
+    class CapturingProvider(FakeLLMProvider):
+        def chat(self, messages, **kwargs):
+            seen["system"] = messages[0]["content"]
+            return super().chat(messages, **kwargs)
+
+    resolver = TagResolver()
+    assert resolver.load()
+    retriever = TagRetriever()
+    assert retriever.load()
+    compiler = PromptCompiler(
+        provider=CapturingProvider(response=GOLDEN_JSON),
+        resolver=resolver,
+        formatter=PromptFormatter(),
+        retriever=retriever,
+    )
+    compiled = compiler.compile("rainy alley의 밤 풍경", mode="tag")
+    assert "AVAILABLE TAGS" in seen["system"]
+    assert "alley" in seen["system"]
+    assert compiled.base_prompt  # 검증된 태그로 정상 컴파일
+
+
+def test_compile_without_retriever_has_no_available_tags():
+    compiled = _compiler().compile("rainy alley의 밤 풍경", mode="tag")
+    assert compiled.base_prompt  # 기존 동작 유지 (후보 주입 없음)
+
+
+def test_korean_input_translates_then_retrieves():
+    # 순수 한국어 입력 → 영문 키워드 0개 → 선번역 1회 → 번역으로 재검색 → 병기
+    from naiauto.core.prompt.retriever import TagRetriever
+
+    calls = []
+
+    class RecordingProvider(FakeLLMProvider):
+        def chat(self, messages, **kwargs):
+            calls.append(messages)
+            return super().chat(messages, **kwargs)
+
+    resolver = TagResolver()
+    assert resolver.load()
+    retriever = TagRetriever()
+    assert retriever.load()
+    compiler = PromptCompiler(
+        provider=RecordingProvider(responses=["rainy alley at night", GOLDEN_JSON]),
+        resolver=resolver,
+        formatter=PromptFormatter(),
+        retriever=retriever,
+    )
+    compiled = compiler.compile("비 오는 밤의 골목", mode="tag")
+    assert len(calls) == 2  # 번역 1회 + 파싱 1회
+    # 번역 호출: 짧은 전용 시스템 프롬프트
+    assert "translation helper" in calls[0][0]["content"]
+    # 파싱 호출: 번역 병기 + RAG 후보 주입
+    assert "rainy alley at night" in calls[1][1]["content"]
+    assert "TRANSLATED QUERY" in calls[1][1]["content"]
+    assert "AVAILABLE TAGS" in calls[1][0]["content"]
+    assert "alley" in calls[1][0]["content"]
+    assert compiled.base_prompt
+
+
+def test_english_input_skips_translation():
+    # 영문 키워드가 검색되면 번역 호출 없이 1회만
+    from naiauto.core.prompt.retriever import TagRetriever
+
+    calls = []
+
+    class RecordingProvider(FakeLLMProvider):
+        def chat(self, messages, **kwargs):
+            calls.append(messages)
+            return super().chat(messages, **kwargs)
+
+    resolver = TagResolver()
+    assert resolver.load()
+    retriever = TagRetriever()
+    assert retriever.load()
+    compiler = PromptCompiler(
+        provider=RecordingProvider(response=GOLDEN_JSON),
+        resolver=resolver,
+        formatter=PromptFormatter(),
+        retriever=retriever,
+    )
+    compiler.compile("rainy alley at night", mode="tag")
+    assert len(calls) == 1
+    assert "AVAILABLE TAGS" in calls[0][0]["content"]  # 영어 키워드로 검색됨
+    assert "TRANSLATED QUERY" not in calls[0][1]["content"]
+
+
+def test_korean_translation_failure_falls_back():
+    # 번역 호출 실패(서버 다운) → 조용히 폴백, 파싱은 정상 진행
+    from naiauto.core.prompt.errors import CompilerConnectionError
+    from naiauto.core.prompt.retriever import TagRetriever
+
+    class FailingTranslateProvider(FakeLLMProvider):
+        def chat(self, messages, **kwargs):
+            if "translation helper" in messages[0]["content"]:
+                raise CompilerConnectionError("llama down")
+            return super().chat(messages, **kwargs)
+
+    resolver = TagResolver()
+    assert resolver.load()
+    retriever = TagRetriever()
+    assert retriever.load()
+    compiler = PromptCompiler(
+        provider=FailingTranslateProvider(response=GOLDEN_JSON),
+        resolver=resolver,
+        formatter=PromptFormatter(),
+        retriever=retriever,
+    )
+    compiled = compiler.compile("비 오는 밤의 골목", mode="tag")
+    assert compiled.base_prompt  # 번역 실패에도 파싱 정상

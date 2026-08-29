@@ -45,6 +45,9 @@ def test_commit_marks_key_available_only_when_save_succeeds(qapp, monkeypatch):
 def test_commit_no_key_leaves_state_unchanged(qapp, monkeypatch):
     from naiauto.ui.options_pages import prompt_ai_page
 
+    # keyring 상태에 의존하지 않도록 load_credential을 mock (빈 키 = 저장 없음)
+    monkeypatch.setattr(prompt_ai_page.credentials, "load_credential", lambda *a: "")
+
     draft = AppSettings()
     page = PromptAiPage(I18nManager())
     page.load(draft)

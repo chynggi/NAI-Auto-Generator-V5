@@ -125,6 +125,11 @@ Linux `~/.local/share/NAI-Auto-V5` · macOS `~/Library/Application Support/NAI-A
 | WD14 모델 | 데이터 폴더의 `wd14/` (`model.onnx`, `selected_tags.csv` — 직접 준비) |
 | 로그 | OS 표준 로그 폴더 (도구 → 로그 보기에서 `폴더 열기`) |
 
+### 🤖 WD14 자동 태깅 준비
+
+1. 의존성 설치: `pip install -e ".[wd14]"` (또는 `pip install onnxruntime`)
+2. [SmilingWolf/wd-v1-4-swinv2-tagger-v2](https://huggingface.co/SmilingWolf/wd-v1-4-swinv2-tagger-v2) 등 WD14 ONNX 모델에서 `model.onnx` **와** `selected_tags.csv`를 받아 데이터 폴더의 `wd14/`에 둔다 — 둘 다 있어야 동작합니다
+
 ### ⚠️ 아직 안 되는 것
 
 - **Precise Reference / Curated Inpainting / Vibe Transfer** — NovelAI가 V5로 아직 출시하지 않았습니다
@@ -136,6 +141,8 @@ Linux `~/.local/share/NAI-Auto-V5` · macOS `~/Library/Application Support/NAI-A
 - stealth PNG 메타데이터 리더: [neggles/sd-webui-stealth-pnginfo](https://github.com/neggles/sd-webui-stealth-pnginfo)
 - WD14 태거 모델: [SmilingWolf](https://huggingface.co/SmilingWolf) ·
   [pythongosssss/ComfyUI-WD14-Tagger](https://github.com/pythongosssss/ComfyUI-WD14-Tagger)
+- Danbooru 태그 DB: [deepghs/site_tags](https://huggingface.co/datasets/deepghs/site_tags) (CC-BY-4.0) ·
+  [HDiffusion/historical-danbooru-tag-counts](https://huggingface.co/datasets/HDiffusion/historical-danbooru-tag-counts) (Apache-2.0) — 태그·post_count·alias를 병합해 내장
 
 위 구성요소는 각자의 라이선스를 따릅니다. 이 저장소 자체는 [PolyForm Noncommercial 1.0.0](LICENSE) — **비상업적 용도로만** 사용할 수 있습니다.
 

@@ -14,9 +14,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -40,6 +43,13 @@ KEYRING_WARN_KEY = "compiler.warn_keyring"
 PROVIDER_ITEMS: tuple[tuple[str, str], ...] = (
     ("options.prompt_ai_provider_openai", "openai_compatible"),
     ("options.prompt_ai_provider_ollama", "ollama"),
+    ("options.prompt_ai_provider_deepseek", "deepseek"),
+    ("options.prompt_ai_provider_llamacpp", "llama_cpp"),
+)
+REASONING_EFFORT_ITEMS: tuple[tuple[str, str], ...] = (
+    ("options.prompt_ai_effort_low", "low"),
+    ("options.prompt_ai_effort_medium", "medium"),
+    ("options.prompt_ai_effort_high", "high"),
 )
 MODE_ITEMS: tuple[tuple[str, str], ...] = (
     ("compiler.mode_tag", "tag"),
@@ -81,6 +91,7 @@ class PromptAiPage(OptionsPage):
         self.provider_combo = QComboBox(self)
         for _key, value in PROVIDER_ITEMS:
             self.provider_combo.addItem(value, value)  # 문구는 retranslate에서 채운다
+        self.provider_combo.currentIndexChanged.connect(self._update_provider_ui)
         form.addRow(self.provider_label, self.provider_combo)
 
         self.base_url_label = QLabel(self)
@@ -90,6 +101,39 @@ class PromptAiPage(OptionsPage):
         self.model_label = QLabel(self)
         self.model_edit = QLineEdit(self)
         form.addRow(self.model_label, self.model_edit)
+
+        # ── llama_cpp (내장 추론) 전용 행 ──
+        self.model_path_label = QLabel(self)
+        self.model_path_edit = QLineEdit(self)
+        self.model_path_browse = QPushButton(self)
+        self.model_path_browse.clicked.connect(self._browse_model)
+        path_row = QHBoxLayout()
+        path_row.addWidget(self.model_path_edit, 1)
+        path_row.addWidget(self.model_path_browse)
+        form.addRow(self.model_path_label, path_row)
+
+        self.n_gpu_layers_label = QLabel(self)
+        self.n_gpu_layers_spin = QSpinBox(self)
+        self.n_gpu_layers_spin.setRange(-1, 200)
+        self.n_gpu_layers_spin.setSpecialValueText("-1 (전부)")
+        form.addRow(self.n_gpu_layers_label, self.n_gpu_layers_spin)
+
+        self.n_cpu_moe_label = QLabel(self)
+        self.n_cpu_moe_spin = QSpinBox(self)
+        self.n_cpu_moe_spin.setRange(0, 512)
+        form.addRow(self.n_cpu_moe_label, self.n_cpu_moe_spin)
+
+        self.expert_hot_s_label = QLabel(self)
+        self.expert_hot_s_spin = QSpinBox(self)
+        self.expert_hot_s_spin.setRange(-1, 512)
+        self.expert_hot_s_spin.setSpecialValueText("-1 (auto)")
+        form.addRow(self.expert_hot_s_label, self.expert_hot_s_spin)
+
+        self.n_ctx_label = QLabel(self)
+        self.n_ctx_spin = QSpinBox(self)
+        self.n_ctx_spin.setRange(512, 262144)
+        self.n_ctx_spin.setSingleStep(1024)
+        form.addRow(self.n_ctx_label, self.n_ctx_spin)
 
         self.temperature_label = QLabel(self)
         self.temperature_spin = QDoubleSpinBox(self)
@@ -115,6 +159,33 @@ class PromptAiPage(OptionsPage):
         self.api_key_edit = QLineEdit(self)
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow(self.api_key_label, self.api_key_edit)
+
+        # ── llama-server 자동 실행 (openai_compatible 전용) ──
+        self.auto_start_check = QCheckBox(self)
+        form.addRow(self.auto_start_check)
+
+        self.server_path_label = QLabel(self)
+        self.server_path_edit = QLineEdit(self)
+        self.server_path_browse = QPushButton(self)
+        self.server_path_browse.clicked.connect(self._browse_server)
+        server_row = QHBoxLayout()
+        server_row.addWidget(self.server_path_edit, 1)
+        server_row.addWidget(self.server_path_browse)
+        form.addRow(self.server_path_label, server_row)
+
+        self.server_args_label = QLabel(self)
+        self.server_args_edit = QLineEdit(self)
+        form.addRow(self.server_args_label, self.server_args_edit)
+
+        # ── DeepSeek 전용 (thinking 모드) ──
+        self.thinking_check = QCheckBox(self)
+        form.addRow(self.thinking_check)
+
+        self.effort_label = QLabel(self)
+        self.effort_combo = QComboBox(self)
+        for _key, value in REASONING_EFFORT_ITEMS:
+            self.effort_combo.addItem(value, value)
+        form.addRow(self.effort_label, self.effort_combo)
         root.addLayout(form)
 
         self.delete_key_check = QCheckBox(self)
@@ -158,6 +229,11 @@ class PromptAiPage(OptionsPage):
         self._select(self.provider_combo, ai.provider)
         self.base_url_edit.setText(ai.base_url)
         self.model_edit.setText(ai.model)
+        self.model_path_edit.setText(ai.model_path)
+        self.n_gpu_layers_spin.setValue(ai.n_gpu_layers)
+        self.n_cpu_moe_spin.setValue(ai.n_cpu_moe)
+        self.expert_hot_s_spin.setValue(ai.expert_hot_s)
+        self.n_ctx_spin.setValue(ai.n_ctx)
         self.temperature_spin.setValue(ai.temperature)
         self.max_tokens_spin.setValue(ai.max_tokens)
         self.timeout_spin.setValue(ai.timeout_seconds)
@@ -173,6 +249,12 @@ class PromptAiPage(OptionsPage):
         self._notices = []
         draft.prompt_ai.api_key_available = bool(credentials.load_credential(API_KEY_CREDENTIAL))
         self._key_stored = draft.prompt_ai.api_key_available
+        self.auto_start_check.setChecked(ai.auto_start_server)
+        self.server_path_edit.setText(ai.server_path)
+        self.server_args_edit.setText(ai.server_args)
+        self.thinking_check.setChecked(ai.thinking_enabled)
+        self._select(self.effort_combo, ai.reasoning_effort)
+        self._update_provider_ui()
         self.retranslate()  # 상태 문구 갱신
 
     def commit(self, draft: AppSettings) -> None:
@@ -180,9 +262,19 @@ class PromptAiPage(OptionsPage):
         ai.provider = self.provider_combo.currentData()
         ai.base_url = self.base_url_edit.text().strip()
         ai.model = self.model_edit.text().strip()
+        ai.model_path = self.model_path_edit.text().strip()
+        ai.n_gpu_layers = self.n_gpu_layers_spin.value()
+        ai.n_cpu_moe = self.n_cpu_moe_spin.value()
+        ai.expert_hot_s = self.expert_hot_s_spin.value()
+        ai.n_ctx = self.n_ctx_spin.value()
         ai.temperature = self.temperature_spin.value()
         ai.max_tokens = self.max_tokens_spin.value()
         ai.timeout_seconds = self.timeout_spin.value()
+        ai.auto_start_server = self.auto_start_check.isChecked()
+        ai.server_path = self.server_path_edit.text().strip()
+        ai.server_args = self.server_args_edit.text().strip()
+        ai.thinking_enabled = self.thinking_check.isChecked()
+        ai.reasoning_effort = self.effort_combo.currentData() or "medium"
         draft.compiler.default_mode = self.mode_combo.currentData()
         draft.compiler.use_danbooru_resolver = self.use_resolver_check.isChecked()
         draft.compiler.preserve_natural_language = self.preserve_nl_check.isChecked()
@@ -214,6 +306,12 @@ class PromptAiPage(OptionsPage):
             self.provider_combo.setItemText(index, tr(key))
         self.base_url_label.setText(tr("options.prompt_ai_base_url"))
         self.model_label.setText(tr("options.prompt_ai_model"))
+        self.model_path_label.setText(tr("options.prompt_ai_model_path"))
+        self.model_path_browse.setText(tr("options.prompt_ai_browse"))
+        self.n_gpu_layers_label.setText(tr("options.prompt_ai_n_gpu_layers"))
+        self.n_cpu_moe_label.setText(tr("options.prompt_ai_n_cpu_moe"))
+        self.expert_hot_s_label.setText(tr("options.prompt_ai_expert_hot_s"))
+        self.n_ctx_label.setText(tr("options.prompt_ai_n_ctx"))
         self.temperature_label.setText(tr("options.prompt_ai_temperature"))
         self.max_tokens_label.setText(tr("options.prompt_ai_max_tokens"))
         self.timeout_label.setText(tr("options.prompt_ai_timeout"))
@@ -225,6 +323,14 @@ class PromptAiPage(OptionsPage):
             if self._key_stored
             else tr("options.prompt_ai_api_key_missing")
         )
+        self.auto_start_check.setText(tr("options.prompt_ai_auto_start_server"))
+        self.server_path_label.setText(tr("options.prompt_ai_server_path"))
+        self.server_path_browse.setText(tr("options.prompt_ai_browse"))
+        self.server_args_label.setText(tr("options.prompt_ai_server_args"))
+        self.thinking_check.setText(tr("options.prompt_ai_thinking"))
+        self.effort_label.setText(tr("options.prompt_ai_effort"))
+        for index, (key, _value) in enumerate(REASONING_EFFORT_ITEMS):
+            self.effort_combo.setItemText(index, tr(key))
         self.compiler_section.setText(tr("options.prompt_ai_compiler_section"))
         self.mode_label.setText(tr("options.compiler_default_mode"))
         for index, (key, _value) in enumerate(MODE_ITEMS):
@@ -239,6 +345,62 @@ class PromptAiPage(OptionsPage):
         return tuple(self._notices)
 
     # ── 내부 ────────────────────────────────────────────────────────────
+
+    def _update_provider_ui(self) -> None:
+        """provider에 따라 표시할 입력 행을 전환한다.
+
+        openai_compatible → Base URL + 모델명 + llama-server 자동 실행.
+        ollama → Base URL + 모델명.
+        deepseek → 모델명 + thinking 모드/강도.
+        llama_cpp → GGUF 모델 경로 + 오프로드/전문가/컨텍스트 설정.
+        """
+        provider = self.provider_combo.currentData()
+        is_openai = provider == "openai_compatible"
+        is_llama = provider == "llama_cpp"
+        is_deepseek = provider == "deepseek"
+        self.base_url_label.setVisible(is_openai or provider == "ollama")
+        self.base_url_edit.setVisible(is_openai or provider == "ollama")
+        self.model_label.setVisible(is_openai or provider == "ollama" or is_deepseek)
+        self.model_edit.setVisible(is_openai or provider == "ollama" or is_deepseek)
+        for w in (
+            self.auto_start_check,
+            self.server_path_label, self.server_path_edit, self.server_path_browse,
+            self.server_args_label, self.server_args_edit,
+        ):
+            w.setVisible(is_openai)
+        self.thinking_check.setVisible(is_deepseek)
+        self.effort_label.setVisible(is_deepseek)
+        self.effort_combo.setVisible(is_deepseek)
+        for w in (
+            self.model_path_label, self.model_path_edit, self.model_path_browse,
+            self.n_gpu_layers_label, self.n_gpu_layers_spin,
+            self.n_cpu_moe_label, self.n_cpu_moe_spin,
+            self.expert_hot_s_label, self.expert_hot_s_spin,
+            self.n_ctx_label, self.n_ctx_spin,
+        ):
+            w.setVisible(is_llama)
+
+    def _browse_server(self) -> None:
+        """llama-server 바이너리 선택 다이얼로그."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self._i18n.get_text("options.prompt_ai_server_path"),
+            self.server_path_edit.text(),
+            "llama-server;;모든 파일 (*)",
+        )
+        if path:
+            self.server_path_edit.setText(path)
+
+    def _browse_model(self) -> None:
+        """GGUF 모델 파일 선택 다이얼로그."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self._i18n.get_text("options.prompt_ai_model_path"),
+            self.model_path_edit.text(),
+            "GGUF 모델 (*.gguf);;모든 파일 (*)",
+        )
+        if path:
+            self.model_path_edit.setText(path)
 
     @staticmethod
     def _select(combo: QComboBox, value: str) -> None:

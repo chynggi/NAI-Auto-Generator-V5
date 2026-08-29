@@ -4,14 +4,16 @@
 CLI 플래그 대신 spec 파일을 쓰는 이유: V4의 distribute.bat은 절대 경로에 묶여 있어
 빌드한 사람의 PC에서만 돌았다. 여기서는 spec 위치를 기준으로 상대 경로만 쓴다.
 
-프로즌 빌드에서 조용히 깨지기 쉬운 두 가지를 여기서 막는다:
+프로즌 빌드에서 조용히 깨지기 쉬운 세 가지를 여기서 막는다:
 
 1. keyring 백엔드 — core/settings/credentials.py가 import 실패를 삼키므로,
    빠지면 "토큰이 저장되지 않는" 증상으로만 드러난다. collect_all로 통째로 넣는다.
 2. 번들 리소스 — 언어 파일과 태그 DB는 `Path(__file__).parent.parent/"resources"`
    기준이라, 번들 안에서도 `naiauto/resources/`에 그대로 있어야 한다.
+3. llama_cpp(내장 추론) — 앱이 lazy import하므로 빠지면 조용히 "모델을 못 연다"로만
+   드러난다. collect_all로 패키지 + lib/*.so를 통째로 넣는다 (아래 주석 참고).
 
-빌드 후 `NAI-Auto-V5.exe --selftest`가 위 둘을 실제로 확인한다 (릴리스 워크플로가 호출).
+빌드 후 `NAI-Auto-V5.exe --selftest`가 위 셋을 실제로 확인한다 (릴리스 워크플로가 호출).
 
 onefile은 만들지 않는다 — 실행할 때마다 100MB대를 임시 폴더에 풀어 시작이 느리고
 백신 오탐도 잦다.
@@ -28,20 +30,46 @@ APP_NAME = "NAI-Auto-V5"
 
 keyring_datas, keyring_binaries, keyring_hiddenimports = collect_all("keyring")
 
+# llama_cpp(내장 추론) — 앱(core/prompt/providers/llama_cpp.py)이 lazy import하므로
+# PyInstaller 정적 분석이 놓치기 쉽다. collect_all로 패키지와 lib/*.so를 함께 담는다.
+# 런타임에 llama_cpp/llama_cpp.py가 `Path(__file__).parent / "lib"`에서 ctypes로
+# 라이브러리를 로드하므로, .so/.dll은 번들 안에서도 `llama_cpp/lib/` 아래 그대로
+# 있어야 한다 (collect_all의 binaries가 원래 패키지 상대 경로를 유지한다).
+# server 서브모듈은 fastapi/uvicorn을 요구하고 앱이 쓰지 않으므로 제외한다
+# (filter_submodules는 PyInstaller 6.3+).
+# 주의: llama_cpp가 빌드 환경에 설치되어 있어야 하며, 현재 릴리스 워크플로
+# (release.yml)에는 llama-cpp-python 설치 단계가 아직 없다 — 추가하지 않으면
+# 여기서 ImportError로 빌드가 멈춘다.
+llama_cpp_datas, llama_cpp_binaries, llama_cpp_hiddenimports = collect_all(
+    "llama_cpp",
+    filter_submodules=lambda m: not m.startswith("llama_cpp.server"),
+)
+
 datas = [
     # (원본, 번들 안 위치) — 앱이 naiauto/resources/... 로 찾는다
     (str(PACKAGE_DIR / "resources"), "naiauto/resources"),
     # 프롬프트 컴파일러 템플릿 — 앱이 naiauto/core/prompt/templates/*.md 로 찾는다
     (str(PACKAGE_DIR / "core" / "prompt" / "templates"), "naiauto/core/prompt/templates"),
     *keyring_datas,
+    *llama_cpp_datas,
 ]
 
 analysis = Analysis(
     [str(SPEC_DIR / "entry.py")],  # app.py를 직접 쓰면 상대 import가 깨진다 (entry.py 주석 참고)
     pathex=[str(PROJECT_DIR / "src")],
-    binaries=keyring_binaries,
+    binaries=keyring_binaries + llama_cpp_binaries,
     datas=datas,
-    hiddenimports=["naiauto", *keyring_hiddenimports],
+    # llama_cpp 런타임 의존성: lazy import 경로라 정적 분석이 놓치므로 명시한다.
+    # numpy는 PyInstaller 전용 hook이 발견만 되면 .so까지 함께 담는다.
+    hiddenimports=[
+        "naiauto",
+        *keyring_hiddenimports,
+        *llama_cpp_hiddenimports,
+        "numpy",
+        "diskcache",
+        "jinja2",
+        "typing_extensions",
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "pytest", "hypothesis"],

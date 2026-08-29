@@ -62,7 +62,7 @@ class OpenAICompatibleProvider:
         messages: list[dict[str, str]],
         *,
         temperature: float,
-        max_tokens: int,
+        max_tokens: int | None,
         timeout: float,
     ) -> str:
         """메시지를 /chat/completions로 보내고 응답 텍스트를 돌려준다."""
@@ -70,9 +70,12 @@ class OpenAICompatibleProvider:
             "model": self.model or "local-model",
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
             "stream": False,
+            **self.extra_payload(),
         }
+        if max_tokens is not None:
+            # None = 길이 제한 없음 — 서버 기본값을 쓴다 (DeepSeek thinking 등).
+            payload["max_tokens"] = max_tokens
         headers = {
             "Content-Type": "application/json",
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
@@ -92,3 +95,7 @@ class OpenAICompatibleProvider:
         if not content:
             raise CompilerEmptyResultError("LLM response has empty content")
         return content
+
+    def extra_payload(self) -> dict:
+        """서브클래스가 payload에 추가할 필드 (기본: 없음)."""
+        return {}

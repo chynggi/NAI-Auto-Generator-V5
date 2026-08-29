@@ -32,6 +32,9 @@ jobs:
       - name: Install
         run: |
           pip install .
+          # 내장 추론 바인딩 — 스펙의 collect_all("llama_cpp")이 import를 필요로 한다.
+          # CI는 사전 빌드 wheel(기본 llama.cpp)을 받는다 — gigatoken 커스텀 빌드는 로컬 전용.
+          pip install llama-cpp-python
           pip install pyinstaller
 
       # 어긋난 릴리스를 막는다 — 태그와 코드의 버전이 다르면 여기서 멈춘다.

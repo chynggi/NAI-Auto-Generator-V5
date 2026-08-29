@@ -19,7 +19,7 @@ import re
 from dataclasses import replace
 from types import SimpleNamespace
 
-from naiauto.core.prompt.errors import CompilerEmptyResultError
+from naiauto.core.prompt.errors import CompilerEmptyResultError, CompilerError
 from naiauto.core.prompt.formatter import PromptFormatter
 from naiauto.core.prompt.llm import LLMProvider
 from naiauto.core.prompt.parser import PRESERVED_TOKEN_RE, SceneParser
@@ -27,6 +27,7 @@ from naiauto.core.prompt.positions import estimate_positions
 from naiauto.core.prompt.providers import API_KEY_CREDENTIAL, create_provider
 from naiauto.core.prompt.relationship import normalize_relationships
 from naiauto.core.prompt.resolver import TagResolver
+from naiauto.core.prompt.retriever import TagRetriever
 from naiauto.core.prompt.schema import (
     MODE_TAGS,
     CharacterPrompt,
@@ -58,12 +59,18 @@ class PromptCompiler:
         max_tokens: int = 2048,
         timeout: float = 120.0,
         use_resolver: bool = True,
+        retriever: TagRetriever | None = None,
+        server_manager=None,
     ) -> None:
         self._parser = SceneParser(provider, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         self._resolver = resolver
         self._formatter = formatter
         #: True = resolver로 태그 검증, False = LLM 원문 태그를 전부 verified로
         self.use_resolver = use_resolver
+        #: RAG 리트리버 — None 또는 DB 비활성이면 후보 주입 없이 기존 동작.
+        self._retriever = retriever
+        #: 자동 기동된 llama-server 프로세스 관리자 (close()에서 종료).
+        self._server_manager = server_manager
 
     def compile(self, text: str, *, mode: str = "hybrid") -> CompiledPrompt:
         """자연어 → CompiledPrompt. 빈 입력은 CompilerEmptyResultError."""
@@ -71,7 +78,12 @@ class PromptCompiler:
             raise ValueError(f"invalid mode: {mode!r} (expected one of {MODE_TAGS})")
         if not text.strip():
             raise CompilerEmptyResultError("empty input")
-        raw = self._parser.parse(text)
+        tags, translations = self._retrieve((text,))
+        raw = self._parser.parse(
+            text,
+            candidate_tags=tags,
+            translated_text=translations.get(text, ""),
+        )
         return self._assemble(raw, mode)
 
     def modify(self, existing_prompt: str, instruction: str, *, mode: str = "hybrid") -> CompiledPrompt:
@@ -86,7 +98,14 @@ class PromptCompiler:
         if mode not in MODE_TAGS:
             raise ValueError(f"invalid mode: {mode!r} (expected one of {MODE_TAGS})")
         preserved = tuple(PRESERVED_TOKEN_RE.findall(existing_prompt))
-        raw = self._parser.parse(instruction, existing_prompt=existing_prompt, preserved=preserved)
+        tags, translations = self._retrieve((existing_prompt, instruction))
+        raw = self._parser.parse(
+            instruction,
+            existing_prompt=existing_prompt,
+            preserved=preserved,
+            candidate_tags=tags,
+            translated_text=translations.get(instruction, ""),
+        )
         result = self._assemble(raw, mode)
         # [Minor #5] 보존 토큰 확인은 부분 문자열이 아니라 태그 목록 세그먼트 단위로 —
         # "1girl"이 "1girls"의 부분 문자열로 오인되는 일이 없도록 한다.
@@ -105,6 +124,35 @@ class PromptCompiler:
     # ------------------------------------------------------------------
     # 내부 조립
     # ------------------------------------------------------------------
+
+    def _retrieve(self, texts: tuple[str, ...]) -> tuple[tuple[str, ...], dict[str, str]]:
+        """RAG: 텍스트별 후보 검색 + 빈 결과 텍스트의 선번역.
+
+        - 각 텍스트를 개별 검색하고, 영문 키워드가 없어 결과가 비면
+          ``SceneParser.translate``로 선번역 후 재검색한다.
+        - 번역 실패(CompilerError)/빈 응답은 조용히 폴백 — 파싱은 원문으로 진행.
+        - 리트리버 없음/DB 비활성 → ((), {}) — 후보·번역 없이 기존 동작.
+        """
+        if self._retriever is None or not self._retriever.is_enabled:
+            return (), {}
+        seen: set[str] = set()
+        tags: list[str] = []
+        translations: dict[str, str] = {}
+        for text in texts:
+            found = self._retriever.search(text)
+            if not found and text.strip():
+                try:
+                    translated = self._parser.translate(text)
+                except CompilerError:
+                    translated = ""
+                if translated:
+                    translations[text] = translated
+                    found = self._retriever.search(translated)
+            for tag in found:
+                if tag not in seen:
+                    seen.add(tag)
+                    tags.append(tag)
+        return tuple(tags), translations
 
     def _assemble(self, raw: LLMStructuredPrompt, mode: str) -> CompiledPrompt:
         """LLM 구조화 출력(LLMStructuredPrompt) → 최종 CompiledPrompt."""
@@ -203,6 +251,17 @@ class PromptCompiler:
             unresolved=tuple(unresolved),
         )
 
+    def close(self) -> None:
+        """내장 추론 provider와 자동 기동된 llama-server의 리소스를 해제한다.
+
+        close()가 없는 provider(HTTP 기반)는 아무 일도 하지 않는다.
+        """
+        close = getattr(self._parser.provider, "close", None)
+        if callable(close):
+            close()
+        if self._server_manager is not None:
+            self._server_manager.close()
+
     def _resolve_tags(self, phrases: list[str]) -> tuple[list[TagRef], list[str]]:
         """후보 문구 목록 → (verified/inferred TagRef 목록, unresolved 태그명 목록).
 
@@ -264,6 +323,15 @@ def build_compiler(settings) -> PromptCompiler:
         base_url=base_url,
         model=model,
         api_key=api_key,
+        # llama_cpp 전용 — 다른 provider에서는 무시된다 (create_provider의 **extra).
+        model_path=getattr(ai, "model_path", "") or "",
+        n_ctx=int(getattr(ai, "n_ctx", 16384) or 16384),
+        n_gpu_layers=int(getattr(ai, "n_gpu_layers", 99) or 99),
+        n_cpu_moe=int(getattr(ai, "n_cpu_moe", 0) or 0),
+        expert_hot_s=int(getattr(ai, "expert_hot_s", 0) or 0),
+        # DeepSeek 전용 — 다른 provider에서는 무시된다.
+        thinking_enabled=bool(getattr(ai, "thinking_enabled", True)),
+        reasoning_effort=getattr(ai, "reasoning_effort", "") or "medium",
     )
 
     use_resolver = bool(getattr(comp, "use_danbooru_resolver", True))
@@ -272,6 +340,27 @@ def build_compiler(settings) -> PromptCompiler:
     resolver = TagResolver(database_path=resolve_database_path(db_path))
     if use_resolver:
         resolver.load()  # 실패 시 내부적으로 비활성
+
+    # RAG 리트리버 — resolver와 같은 DB를 사용한다. 로드 실패 시 검색 비활성(폴백).
+    retriever = TagRetriever(database_path=resolve_database_path(db_path))
+    retriever.load()
+
+    # llama-server 자동 기동 (openai_compatible + auto_start_server).
+    # ensure_running 실패는 치명적이지 않다 — 기존 서버가 있으면 재사용되고,
+    # 없으면 provider 호출 시 연결 오류로 안내된다.
+    server_manager = None
+    if provider_name == "openai_compatible" and bool(getattr(ai, "auto_start_server", False)):
+        from .providers.server_manager import LlamaServerManager
+
+        server_manager = LlamaServerManager(
+            server_path=getattr(ai, "server_path", "") or "",
+            args=getattr(ai, "server_args", "") or "",
+            base_url=base_url,
+        )
+        try:
+            server_manager.ensure_running()
+        except CompilerError:
+            server_manager = None  # 폴백 — 컴파일러는 연결 오류로 동작
 
     formatter = PromptFormatter(
         preserve_natural_language=bool(getattr(comp, "preserve_natural_language", True)),
@@ -286,4 +375,6 @@ def build_compiler(settings) -> PromptCompiler:
         max_tokens=int(getattr(ai, "max_tokens", 2048)),
         timeout=float(getattr(ai, "timeout_seconds", 120.0)),
         use_resolver=use_resolver,
+        retriever=retriever,
+        server_manager=server_manager,
     )

@@ -131,9 +131,22 @@ class PromptFontSettings(BaseModel):
 class PromptAISettings(BaseModel):
     """LLM provider 설정 (스펙 §46). api_key는 설정 파일에 저장하지 않는다 — keyring."""
 
-    provider: str = "openai_compatible"          # "openai_compatible" | "ollama"
+    provider: str = "openai_compatible"          # "openai_compatible" | "ollama" | "llama_cpp"
     base_url: str = "http://127.0.0.1:7112/v1"   # llama.cpp 로컬 서버 (OpenAI 호환)
     model: str = ""
+    # ── llama-server 자동 실행 (openai_compatible 전용) ──
+    auto_start_server: bool = False              # True면 앱이 llama-server를 자동 기동/종료
+    server_path: str = ""                        # llama-server 바이너리 경로
+    server_args: str = ""                        # 실행 인자 (예: -m model.gguf -ncmoe 22 -md draft.gguf)
+    # ── llama_cpp (내장 추론) 전용 ──
+    model_path: str = ""                         # GGUF 모델 파일 경로
+    n_gpu_layers: int = 99                       # GPU 오프로드 레이어 수 (99 = 전부)
+    n_cpu_moe: int = 0                           # CPU 오프로드 MoE 전문가 수 (Serenity=22)
+    expert_hot_s: int = 0                        # gigatoken expert hot store (-1 = auto)
+    n_ctx: int = 16384                           # 컨텍스트 길이
+    # ── DeepSeek 전용 ──
+    thinking_enabled: bool = True                # thinking 모드 (공식 기본값 = enabled)
+    reasoning_effort: str = "medium"             # "low" | "medium" | "high"
     timeout_seconds: float = 120.0
     temperature: float = 0.3
     max_tokens: int = 2048
