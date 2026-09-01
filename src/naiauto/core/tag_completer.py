@@ -216,28 +216,46 @@ class TagCompleter:
         return text.lower().replace("_", " ")
 
     def _try_parse_json(self, raw: str) -> list[TagEntry] | None:
-        """Try parsing as JSON array of {name, post_count} objects."""
+        """Try parsing as JSON — 두 가지 형식을 지원한다.
+
+        1. ``{"tag": count, ...}`` — 간결한 key-value 객체 (NAIA2.0 unique_tags.json 등).
+        2. ``[{name, post_count}, ...]`` — 상세 entry 배열.
+
+        순서대로 시도하며, 어느 형식도 아니면 None을 반환한다.
+        """
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
             return None
 
-        if not isinstance(data, list):
-            return None
+        # 형식 1: {"tag": count, ...}
+        if isinstance(data, dict):
+            entries: list[TagEntry] = []
+            for name, count in data.items():
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                try:
+                    entries.append(TagEntry(name=name.strip(), post_count=int(count)))
+                except (TypeError, ValueError):
+                    continue
+            return entries if entries else None
 
-        entries: list[TagEntry] = []
-        for item in data:
-            if not isinstance(item, dict):
-                return None
-            try:
-                name = str(item["name"])
-                post_count = int(item["post_count"])
-                if name:
-                    entries.append(TagEntry(name=name, post_count=post_count))
-            except (KeyError, TypeError, ValueError):
-                return None
+        # 형식 2: [{name, post_count}, ...]
+        if isinstance(data, list):
+            entries = []
+            for item in data:
+                if not isinstance(item, dict):
+                    return None
+                try:
+                    name = str(item["name"])
+                    post_count = int(item["post_count"])
+                    if name:
+                        entries.append(TagEntry(name=name, post_count=post_count))
+                except (KeyError, TypeError, ValueError):
+                    return None
+            return entries if entries else None
 
-        return entries if entries else None
+        return None
 
     def _try_parse_lines(self, raw: str) -> list[TagEntry] | None:
         """`태그[개수]` / `태그,개수` 줄들을 읽는다. 한 줄도 못 읽으면 None."""
