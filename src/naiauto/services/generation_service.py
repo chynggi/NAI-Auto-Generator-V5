@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from ..core.api.client import NAIClient
 from ..core.api.errors import NAIError, NetworkError, RateLimitError, ServerBusyError
-from ..core.api.models import GenerationRequest
+from ..core.api.models import CharacterCaption, GenerationRequest
 from ..core.artist_combos import ArtistComboEngine
 from ..core.credit_estimator import CreditObservation
 from ..core.metadata.save import save_raw_png
@@ -74,6 +74,11 @@ class GenerationJob:
     measure_credit: bool = False  # 매 장 후 V5 크레딧/Anlas를 로그에 기록 (요청 1회 추가)
     randomize_resolution: bool = False  # True: 매 장 resolution_choices 중 하나로 해상도 변경
     resolution_choices: tuple[tuple[int, int], ...] = ()  # Aspect별 대표 해상도 (2개 미만이면 무시)
+    #: 장마다 요청 자체가 다른 배치(폴더 강화)용 — index(1부터)를 받아 그 장의 요청을 돌려준다.
+    #: 있으면 `request`는 쓰이지 않고, 크기·프롬프트 라이브 오버라이드와 랜덤 해상도도 꺼진다
+    #: (이미지마다 크기와 프롬프트가 다르므로 하나의 값으로 덮으면 안 된다).
+    #: 워커 스레드에서 불리므로 위젯을 만지지 않는 순수 함수여야 한다.
+    request_provider: Callable[[int], GenerationRequest] | None = None
 
 
 class GenerationService:
@@ -93,6 +98,12 @@ class GenerationService:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="naiauto-gen")
         self._stop = threading.Event()
         self._future: Future | None = None
+        # `is_running`의 근거. `_future.done()`에 기대면 경합이 생긴다 — 워커 스레드는
+        # `_run()` 안에서 `JobFinished`를 emit한 *뒤에도* 아직 함수가 안 끝나 future가
+        # done 처리되기 전이라, 그 이벤트를 받은 GUI 스레드가 곧바로 다음 잡을 `start()`하면
+        # (세팅별 연속 생성처럼) `is_running`이 여전히 True로 보여 RuntimeError가 난다.
+        # 그래서 `JobFinished`를 emit하기 *직전에* 이 플래그부터 내린다 (`_emit()` 참고).
+        self._running = False
         self._last_probe: tuple[int | None, int | None] | None = None
         self._last_probe_at: float = 0.0
         # GUI 스레드 → 워커 스레드로 넘어가는 유일한 값(_stop 제외): 배치 도중 해상도 패널에서
@@ -100,6 +111,9 @@ class GenerationService:
         self._live_resolution_lock = threading.Lock()
         self._live_resolution: tuple[int, int] | None = None
         self._live_resolution_choices: tuple[tuple[int, int], ...] = ()
+        # 같은 이유로: 배치 도중 프롬프트/캐릭터 프롬프트를 고치면 다음 이미지부터 반영한다.
+        self._live_prompt_lock = threading.Lock()
+        self._live_prompt: tuple[str, str, tuple[CharacterCaption, ...], bool] | None = None
 
     def reload_artist_combos(self, combos_dir: str) -> None:
         """아티스트 조합 폴더를 다시 읽는다 (옵션에서 경로를 바꿨을 때).
@@ -115,16 +129,19 @@ class GenerationService:
 
     @property
     def is_running(self) -> bool:
-        return self._future is not None and not self._future.done()
+        return self._running
 
     def start(self, job: GenerationJob) -> Future:
         """잡 시작. 이미 실행 중이면 RuntimeError (직렬 생성 강제)."""
         if self.is_running:
             raise RuntimeError("a generation job is already running")
+        self._running = True
         self._stop.clear()
         with self._live_resolution_lock:
             self._live_resolution = None
             self._live_resolution_choices = ()
+        with self._live_prompt_lock:
+            self._live_prompt = None
         self._future = self._executor.submit(self._run, job)
         return self._future
 
@@ -141,6 +158,21 @@ class GenerationService:
             self._live_resolution = (width, height)
             self._live_resolution_choices = choices
 
+    def set_live_prompt(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        characters: tuple[CharacterCaption, ...],
+        use_coords: bool,
+    ) -> None:
+        """프롬프트/캐릭터 프롬프트가 바뀔 때 GUI 스레드에서 호출 — 다음 `_prepare_request()`부터
+        반영된다 (`set_live_resolution`과 같은 패턴). 진행 중인 이미지에는 영향이 없다.
+
+        `use_coords`도 함께 넘긴다 — 캐릭터별 좌표는 이미 그 값을 기준으로 굳어 있으므로
+        (`captions()`), 요청의 최상위 플래그가 어긋나면 payload가 일관되지 않는다."""
+        with self._live_prompt_lock:
+            self._live_prompt = (prompt, negative_prompt, characters, use_coords)
+
     def shutdown(self) -> None:
         self._stop.set()
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -148,6 +180,10 @@ class GenerationService:
     # ── 실행 루프 ─────────────────────────────────────────
 
     def _emit(self, event: GenerationEvent) -> None:
+        if isinstance(event, JobFinished):
+            # 콜백을 부르기 전에 내려야 한다 — 콜백이 (세팅별 연속 생성처럼) 그 자리에서
+            # 바로 `start()`를 부를 수 있고, 그 시점엔 `is_running`이 이미 False여야 한다.
+            self._running = False
         try:
             self._on_event(event)
         except Exception:
@@ -198,14 +234,15 @@ class GenerationService:
         index = 0
         try:
             # 고정 시드 + 연속 생성 = 같은 이미지 반복. 시작 전에 막는다.
-            if not job.randomize_seed and job.count != 1:
+            # (장마다 원본이 다른 폴더 강화는 시드가 같아도 같은 그림이 나오지 않는다.)
+            if not job.randomize_seed and job.count != 1 and job.request_provider is None:
                 raise FixedSeedBatchError("batch generation requires a random seed")
             while job.count == 0 or index < job.count:
                 if self._stop.is_set():
                     raise _StopRequested
                 index += 1
 
-                req = self._prepare_request(job)
+                req = self._prepare_request(job, index)
                 self._emit(ImageStarted(index=index, seed=req.seed, prompt=req.prompt))
 
                 result = self._generate_with_policy(req, index)
@@ -310,9 +347,19 @@ class GenerationService:
             deltas,
         )
 
-    def _prepare_request(self, job: GenerationJob) -> GenerationRequest:
+    def _prepare_request(self, job: GenerationJob, index: int = 1) -> GenerationRequest:
         """이미지 1장분 불변 요청 파생: 와일드카드 1사이클 + 아티스트 콤보 1사이클 + 시드 결정."""
-        req = job.request
+        per_image = job.request_provider is not None
+        req = job.request_provider(index) if per_image else job.request
+        with self._live_prompt_lock:
+            live_prompt = self._live_prompt
+        if per_image:
+            live_prompt = None  # 장마다 프롬프트가 다르다 — 하나의 값으로 덮으면 안 된다
+        if live_prompt is not None:
+            prompt, negative, characters, use_coords = live_prompt
+            req = dataclasses.replace(
+                req, prompt=prompt, negative_prompt=negative, characters=characters, use_coords=use_coords
+            )
         if self._wildcards is not None:
             self._wildcards.create_index_snapshot()
             prompt = self._wildcards.apply_wildcards_with_snapshot(req.prompt)
@@ -357,8 +404,10 @@ class GenerationService:
         with self._live_resolution_lock:
             live_size = self._live_resolution
             live_choices = self._live_resolution_choices
+        if per_image:
+            live_size, live_choices = None, ()  # 크기는 원본 이미지가 정한다
         choices = live_choices or job.resolution_choices
-        if job.randomize_resolution and len(choices) >= 2:
+        if not per_image and job.randomize_resolution and len(choices) >= 2:
             width, height = self._rng.choice(choices)
             req = dataclasses.replace(req, width=width, height=height)
         elif live_size is not None:

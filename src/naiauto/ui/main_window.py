@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import random
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -17,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import platformdirs
 import shiboken6
-from PySide6.QtCore import QSettings, Qt, QUrl, Signal, SignalInstance
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal, SignalInstance
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -49,13 +51,14 @@ from ..core.api.model_specs import MODEL_REGISTRY, ModelSpec, get_spec
 from ..core.api.models import CharacterCaption, GenerationRequest
 from ..core.api.subscription import OpusUsage
 from ..core.credit_estimator import CreditEstimator
+from ..core.enhance import apply_enhance, build_enhance_provider, unusable_sources
 from ..core.i18n.manager import I18nManager
 from ..core.logging_setup import configure_logging, crash_log_path, log_path
 from ..core.metadata.reuse import ReusableSettings
 from ..core.presets import CharacterPromptPreset, GenerationPreset, PresetError, PresetStore
 from ..core.prompt.merge import merge_negatives
 from ..core.resolution_catalog import ResolutionCatalog
-from ..core.settings import credentials
+from ..core.settings import accounts, credentials
 from ..core.settings.schema import APP_NAME, QUICK_COUNT_SLOTS, AppSettings, CharacterPromptState
 from ..core.settings.store import ensure_dirs
 from ..core.tag_completer import TagCompleter, resolve_database_path
@@ -70,6 +73,7 @@ from ..services.events import (
     WaitingNext,
 )
 from ..services.generation_service import GenerationJob, GenerationService
+from .accounts_dialog import AccountsDialog
 from .gallery_view import GalleryView
 from .image_info_dialog import ImageInfoDialog
 from .log_dialog import LogDialog
@@ -81,6 +85,7 @@ from .qt_bridge import QtEventBridge
 from .tag_completer_dropdown import TagCompleterDropdown
 from .widgets.character_prompts import CharacterPromptsWidget, CharacterSlot
 from .widgets.collapsible_section import CollapsibleSection, compose_ai_summary
+from .widgets.enhance_panel import EnhancePanel
 from .widgets.image_source import ImageSourceWidget
 from .widgets.prompt_tabs import PromptTabs
 from .widgets.resize_handle import ResizeHandle
@@ -164,13 +169,15 @@ class MainWindow(QMainWindow):
         self._logged_in = client.session.is_logged_in
 
         self._qsettings = QSettings()
+        #: 세팅별 연속 생성이 순환할 파일 목록 — 비어 있으면 진행 중이 아니다.
+        self._settings_batch_paths: list[str] = []
 
         #: 마지막으로 연 컴파일러 다이얼로그 (적용 결과 요약에서 _compiled를 읽는다).
         self._compiler_dialog: PromptCompilerDialog | None = None
 
         self._build_ui()
         self._resize_handle.restore_height()
-        self._restore_prompt_char_splitter()
+        self._restore_splitters()
         self._setup_m3_components()
         self._populate_models()
         self._apply_settings()
@@ -305,6 +312,16 @@ class MainWindow(QMainWindow):
         self.image_source.setVisible(False)  # 보기 메뉴(F2)로 켠다
         left_layout.addWidget(self.image_source)
 
+        # Enhance(강화 업스케일) — i2i와 같은 img2img 경로를 쓰지만 크기·프롬프트를
+        # 배율에서 계산한다 (core/enhance.py). 둘 다 켜면 어느 쪽이 요청을 만드는지
+        # 알 수 없으므로 보기 메뉴에서 서로 배타로 묶는다.
+        self.enhance_panel = EnhancePanel(self._i18n)
+        self.enhance_panel.changed.connect(self._on_enhance_changed)
+        self.enhance_panel.source_loaded.connect(self._on_enhance_source_loaded)
+        self.enhance_panel.folder_requested.connect(self._on_enhance_folder)
+        self.enhance_panel.setVisible(False)  # 보기 메뉴(F4)로 켠다
+        left_layout.addWidget(self.enhance_panel)
+
         self._wire_sections()
 
         # 스크롤하다 커서가 지나가는 것만으로 값이 바뀌지 않게 한다
@@ -359,6 +376,10 @@ class MainWindow(QMainWindow):
         self.login_action = self.file_menu.addAction("")
         self.login_action.setShortcut("Ctrl+I")  # V4와 같은 단축키
         self.login_action.triggered.connect(self._on_open_login)
+        # 계정을 여러 개 쓰는 사용자를 위한 토큰 전환 창 (최대 4개)
+        self.accounts_action = self.file_menu.addAction("")
+        self.accounts_action.setShortcut("Ctrl+Shift+I")
+        self.accounts_action.triggered.connect(self._on_open_accounts)
         self.file_menu.addSeparator()
         self.image_info_action = self.file_menu.addAction("")
         self.image_info_action.triggered.connect(self._on_open_image_info)
@@ -397,6 +418,13 @@ class MainWindow(QMainWindow):
         self.image_source_action.setCheckable(True)
         self.image_source_action.setShortcut("F2")
         self.image_source_action.toggled.connect(self.image_source.set_active)
+        self.image_source_action.toggled.connect(self._on_image_source_toggled)
+
+        self.enhance_action = self.view_menu.addAction("")
+        self.enhance_action.setCheckable(True)
+        self.enhance_action.setShortcut("F4")
+        self.enhance_action.toggled.connect(self.enhance_panel.set_active)
+        self.enhance_action.toggled.connect(self._on_enhance_toggled)
 
         # M3: Gallery View action
         self.view_menu.addSeparator()
@@ -456,6 +484,13 @@ class MainWindow(QMainWindow):
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         self.resolution_panel.changed.connect(self._on_resolution_changed)  # Req 10.14
 
+        # 프롬프트/캐릭터 프롬프트를 고치면 연속 생성 중 다음 이미지부터 반영한다
+        self.prompt_edit.textChanged.connect(self._push_live_prompt)
+        self.negative_edit.textChanged.connect(self._push_live_prompt)
+        self.quality_check.toggled.connect(self._push_live_prompt)
+        self.uc_preset_combo.currentIndexChanged.connect(self._push_live_prompt)
+        self.character_prompts.prompts_changed.connect(self._push_live_prompt)
+
     def _build_generate_bar(self) -> QWidget:
         """매수·간격 + 생성 버튼 한 줄. 스크롤 밖에 고정되는 바."""
         self.generate_group = QGroupBox()
@@ -480,11 +515,13 @@ class MainWindow(QMainWindow):
 
         self.once_button = QPushButton()
         self.auto_button = QPushButton()
+        self.by_settings_button = QPushButton()  # V4의 "세팅별 연속 생성"
         self.stop_button = QPushButton()
         self.stop_button.setEnabled(False)
         self.once_button.clicked.connect(self._on_generate_once)
         self.auto_button.clicked.connect(self._on_generate_auto)
-        self.stop_button.clicked.connect(self._service.stop)
+        self.by_settings_button.clicked.connect(self._on_generate_by_settings)
+        self.stop_button.clicked.connect(self._on_stop_clicked)
 
         batch_row.addWidget(self.count_label)
         batch_row.addWidget(self.count_spin)
@@ -505,6 +542,7 @@ class MainWindow(QMainWindow):
 
         button_row.addWidget(self.once_button)
         button_row.addWidget(self.auto_button)
+        button_row.addWidget(self.by_settings_button)
         button_row.addWidget(self.stop_button)
         # 스크롤 밖이라 휠 사고가 날 일은 없지만, 값 위젯 규칙은 똑같이 적용한다
         guard_wheel(self.generate_group, self._wheel_guard)
@@ -609,13 +647,41 @@ class MainWindow(QMainWindow):
     # ── M3: WD14 Auto-Tag ────────────────────────────────
 
     def _on_open_wd14(self) -> None:
-        """WD14 Auto-Tag 다이얼로그를 연다."""
+        """WD14 Auto-Tag 다이얼로그를 연다.
+
+        모델과 태그 CSV는 옵션 → 태그에서 지정한 폴더(`wd14_dir`)에서, 거기서 고른
+        모델(`wd14_model`)을 우선해 찾는다 (기본 폴더는 데이터 폴더의 `wd14/`).
+        파일 이름은 받은 곳마다 다르므로 폴더 안을 훑는다 —
+        `core.wd14_tagger.resolve_model_files` 참고.
+        """
+        from ..core.wd14_tagger import resolve_model_files, runtime_error
+
+        tr = self._i18n.get_text
+
+        # onnxruntime을 쓸 수 없으면 창을 열어 봐야 아무것도 못 한다 — 이유를 그대로 알린다.
+        # (모델이 없는 것과 원인이 전혀 다르므로 안내도 따로 한다.)
+        failure = runtime_error()
+        if failure:
+            logger.warning("WD14 runtime unavailable: %s", failure)
+            QMessageBox.information(
+                self, tr("menu.wd14_auto_tag"), tr("errors.wd14_runtime_missing", failure)
+            )
+            return
+
         from .wd14_dialog import WD14Dialog
 
-        # WD14 모델/태그 경로는 데이터 디렉토리의 관습적 위치를 사용
-        data_dir = Path(platformdirs.user_data_dir(APP_NAME))
-        model_path = data_dir / "wd14" / "model.onnx"
-        tags_path = data_dir / "wd14" / "selected_tags.csv"
+        directory = self._settings.wd14_dir_path()
+        model_path, tags_path = resolve_model_files(directory, self._settings.wd14_model)
+
+        if model_path is None or tags_path is None:
+            missing = "*.onnx" if model_path is None else "*.csv"
+            logger.warning("WD14 model files not found in %s (missing %s)", directory, missing)
+            QMessageBox.information(
+                self,
+                tr("menu.wd14_auto_tag"),
+                tr("errors.wd14_model_missing", missing, str(directory)),
+            )
+            return
 
         try:
             from ..core.wd14_tagger import WD14Tagger
@@ -625,8 +691,8 @@ class MainWindow(QMainWindow):
             logger.warning("WD14 tagger could not be initialized")
             QMessageBox.information(
                 self,
-                self._i18n.get_text("menu.tools"),
-                f"WD14 model is not available. Place the ONNX model at:\n{model_path}",
+                tr("menu.wd14_auto_tag"),
+                tr("errors.wd14_model_missing", "*.onnx", str(directory)),
             )
             return
 
@@ -919,29 +985,44 @@ class MainWindow(QMainWindow):
         self.ai_section.set_expanded(False)
 
     def target_size(self) -> tuple[int, int]:
-        """실제로 생성될 크기 — i2i/인페인팅이면 원본 이미지 크기를 따른다."""
-        if self.image_source.size is not None:
-            return self.image_source.size
-        return self.resolution_panel.size()
+        """실제로 생성될 크기 — i2i/인페인팅/강화면 원본 이미지가 정한다."""
+        locked = self.locked_size()
+        return locked if locked is not None else self.resolution_panel.size()
+
+    def locked_size(self) -> tuple[int, int] | None:
+        """해상도 입력을 잠그는 크기 — 원본 이미지가 크기를 정하는 경우에만 값이 있다.
+
+        강화는 배율에 따라 원본보다 큰 해상도에서 확산이 돌 수 있으므로(1.5x),
+        원본 크기가 아니라 계획의 확산 크기를 쓴다.
+        """
+        enhance_size = self.enhance_panel.diffusion_size()
+        if enhance_size is not None:
+            return enhance_size
+        return self.image_source.size
 
     def _sync_position_aspect(self) -> None:
         """캐릭터 위치 캔버스를 생성 해상도 비율로 맞춘다."""
         self.character_prompts.set_aspect(*self.target_size())
 
-    # ── 프롬프트/캐릭터 스플리터 상태 저장·복원 ─────────────────
+    # ── 스플리터 상태 저장·복원 (프롬프트/캐릭터 + 좌·우 메인 스플리터) ─────
 
     _SPLITTER_KEY = "ui/prompt_char_splitter"
+    _MAIN_SPLITTER_KEY = "ui/main_splitter"
     _GEOMETRY_KEY = "ui/main_window_geometry"
 
-    def _save_prompt_char_splitter(self) -> None:
+    def _save_splitters(self) -> None:
         """스플리터 상태를 QSettings에 저장한다."""
         self._qsettings.setValue(self._SPLITTER_KEY, self._prompt_char_splitter.saveState())
+        self._qsettings.setValue(self._MAIN_SPLITTER_KEY, self._splitter.saveState())
 
-    def _restore_prompt_char_splitter(self) -> None:
+    def _restore_splitters(self) -> None:
         """QSettings에서 스플리터 상태를 복원한다."""
         state = self._qsettings.value(self._SPLITTER_KEY)
         if state is not None:
             self._prompt_char_splitter.restoreState(state)
+        main_state = self._qsettings.value(self._MAIN_SPLITTER_KEY)
+        if main_state is not None:
+            self._splitter.restoreState(main_state)
 
     def _save_window_geometry(self) -> None:
         """창 크기·위치를 QSettings에 저장한다."""
@@ -968,10 +1049,38 @@ class MainWindow(QMainWindow):
         생성 크기는 원본 이미지 크기를 따르므로(`target_size`), 패널이 그 사실을 문구로
         알리고 입력란을 비활성화한다.
         """
-        size = self.image_source.size
+        self._refresh_resolution_lock()
+
+    def _refresh_resolution_lock(self) -> None:
+        """원본 이미지가 크기를 정하고 있으면 해상도 입력을 잠근다 (Req 10.13)."""
+        size = self.locked_size()
         self.resolution_panel.set_source_locked(size is not None, size)
         self._sync_position_aspect()
         self._push_live_resolution()
+
+    def _on_enhance_changed(self) -> None:
+        """강화 원본·배율이 바뀌면 잠긴 해상도 표시를 다시 맞춘다."""
+        self._refresh_resolution_lock()
+
+    def _on_image_source_toggled(self, on: bool) -> None:
+        """i2i와 강화는 둘 다 img2img 요청을 만든다 — 한 번에 하나만 켠다."""
+        if on and self.enhance_action.isChecked():
+            self.enhance_action.setChecked(False)
+
+    def _on_enhance_toggled(self, on: bool) -> None:
+        if on and self.image_source_action.isChecked():
+            self.image_source_action.setChecked(False)
+
+    def _on_enhance_source_loaded(self) -> None:
+        """강화 원본을 불러왔다 — 그 그림의 생성 설정을 위젯에 그대로 얹는다.
+
+        시드는 빼고 적용한다: 웹 UI도 강화할 때마다 새 시드를 쓰고(원본/1.5x/Max
+        캡처의 시드가 전부 다르다), 고정 시드로 남으면 연속 생성이 막힌다.
+        """
+        settings = self.enhance_panel.metadata_settings
+        if not self.enhance_panel.use_metadata or settings is None:
+            return
+        self.apply_reusable(dataclasses.replace(settings, seed=None))
 
     def _push_live_resolution(self) -> None:
         """배치 진행 중이면 해상도 변경을 다음 이미지부터 반영한다 (진행 중인 이미지는 그대로).
@@ -981,8 +1090,30 @@ class MainWindow(QMainWindow):
         if not self._service.is_running:
             return
         size = self.target_size()
-        choices = () if self.image_source.size is not None else self.resolution_panel.aspect_random_choices()
+        choices = () if self.locked_size() is not None else self.resolution_panel.aspect_random_choices()
         self._service.set_live_resolution(size[0], size[1], choices)
+
+    def _push_live_prompt(self) -> None:
+        """배치 진행 중이면 프롬프트/캐릭터 프롬프트 변경을 다음 이미지부터 반영한다.
+
+        진행 중인 이미지에는 영향이 없다 (`build_job`과 같은 조합 규칙을 그대로 따른다).
+        """
+        if not self._service.is_running:
+            return
+        spec = self.current_spec()
+        prompt = self.prompt_edit.toPlainText().strip()
+        if self.quality_check.isChecked():
+            prompt += spec.quality_tags
+        uc_key = self.uc_preset_combo.currentData() or "none"
+        preset_uc = spec.uc_presets.get(uc_key, "")
+        user_uc = self.negative_edit.toPlainText().strip()
+        negative = ", ".join(part for part in (preset_uc, user_uc) if part)
+        plan = self.enhance_panel.plan()
+        if plan is not None and self.enhance_panel.image_bytes is not None:
+            prompt += plan.prompt_suffix  # build_job과 같은 조합 규칙을 유지한다
+        self._service.set_live_prompt(
+            prompt, negative, self.character_prompts.captions(), self.character_prompts.use_coords()
+        )
 
     def _on_model_changed(self) -> None:
         spec = self.current_spec()
@@ -1009,6 +1140,10 @@ class MainWindow(QMainWindow):
         self.image_source.draw_mask_button.setEnabled(
             "inpaint" in spec.supports and self.image_source.image_bytes is not None
         )
+        self.enhance_panel.setEnabled(supports_i2i)
+        self.enhance_action.setEnabled(supports_i2i)
+        if not supports_i2i:
+            self.enhance_action.setChecked(False)
         defaults = spec.defaults
         self.sampler_combo.setCurrentText(str(defaults.get("sampler", "")))
         self.scheduler_combo.setCurrentText(str(defaults.get("scheduler", "")))
@@ -1045,6 +1180,7 @@ class MainWindow(QMainWindow):
         self.image_source_action.setChecked(
             self._settings.show_image_source and self.image_source_action.isEnabled()
         )
+        self.enhance_action.setChecked(self._settings.show_enhance and self.enhance_action.isEnabled())
         self.measure_credit_action.setChecked(self._settings.measure_credit)
         self._apply_prompts()
         self._apply_prompt_font()
@@ -1095,7 +1231,7 @@ class MainWindow(QMainWindow):
 
     def collect_settings(self) -> AppSettings:
         """현재 위젯 상태를 설정 객체로 (종료 시 영속화용)."""
-        self._save_prompt_char_splitter()
+        self._save_splitters()
         self._save_window_geometry()
         s = self._settings
         g = s.generation
@@ -1113,6 +1249,7 @@ class MainWindow(QMainWindow):
         s.batch.delay_seconds = self.delay_spin.value()
         s.batch.random_resolution = self.random_resolution_check.isChecked()
         s.show_image_source = self.image_source_action.isChecked()
+        s.show_enhance = self.enhance_action.isChecked()
         s.measure_credit = self.measure_credit_action.isChecked()
         p = s.prompts
         p.prompt = self.prompt_edit.toPlainText()
@@ -1173,6 +1310,7 @@ class MainWindow(QMainWindow):
         self.image_source_action.setChecked(  # Req 6.3 (토글이 패널 표시까지 맞춘다)
             s.show_image_source and self.image_source_action.isEnabled()
         )
+        self.enhance_action.setChecked(s.show_enhance and self.enhance_action.isEnabled())
         self.measure_credit_action.setChecked(s.measure_credit)  # Req 8.8
         self._refresh_tag_completer()  # Req 7.3
         self._apply_prompt_font()
@@ -1302,6 +1440,36 @@ class MainWindow(QMainWindow):
         self.set_logged_in(False)
         QMessageBox.information(self, tr("dialogs.logout_complete_title"), tr("dialogs.logout_complete"))
 
+    # ── API 계정 전환 (여러 계정을 번갈아 쓰는 사용자용) ──────
+
+    def _on_open_accounts(self) -> None:
+        """파일 → API 계정 관리. 저장해 둔 토큰 중 하나로 즉시 갈아탄다."""
+        dialog = AccountsDialog(
+            self._i18n,
+            self._switch_account,
+            current_token=self._client.session.access_token or "",
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.switched:
+            self.set_logged_in(self._client.session.is_logged_in)
+
+    def _switch_account(self, token: str) -> None:
+        """새 토큰으로 로그인해 본다. 실패하면 쓰던 계정을 그대로 되돌린다.
+
+        `_validate_token`은 실패할 때 세션을 비우므로, 되돌리지 않으면 멀쩡히 쓰던
+        계정까지 로그아웃된 것처럼 보인다. 진행 중인 연속 생성은 건드리지 않는다 —
+        다음 요청부터 새 토큰이 쓰인다.
+        """
+        previous = self._client.session.access_token
+        try:
+            self._validate_token(token)
+        except Exception:
+            if previous and accounts.is_valid_token(previous):
+                self._client.session.login_with_token(previous)
+            raise
+        logger.info("switched to another API account")
+
     def set_logged_in(self, logged_in: bool) -> None:
         """로그인 상태를 반영한다 — 생성 버튼, 상태바, 잔액 표시.
 
@@ -1399,8 +1567,13 @@ class MainWindow(QMainWindow):
 
     # ── 잡 빌드/실행 ─────────────────────────────────────
 
-    def build_job(self, count: int) -> GenerationJob:
-        """위젯 상태를 불변 잡으로 스냅숏. 여기 이후 워커는 위젯을 안 본다."""
+    def build_job(self, count: int, *, enhance: bool = True) -> GenerationJob:
+        """위젯 상태를 불변 잡으로 스냅숏. 여기 이후 워커는 위젯을 안 본다.
+
+        `enhance=False`는 폴더 강화용이다 — 거기서는 패널이 들고 있는 한 장이 아니라
+        대기열의 각 이미지로 요청을 만들므로, 기본 요청에 강화를 미리 얹으면 안 된다
+        (프롬프트 꼬리가 두 번 붙는다).
+        """
         spec = self.current_spec()
         prompt = self.prompt_edit.toPlainText().strip()
         if self.quality_check.isChecked():
@@ -1415,7 +1588,7 @@ class MainWindow(QMainWindow):
         randomize = self.seed_random_check.isChecked()
         # i2i/인페인팅으로 해상도가 잠겨 있으면 랜덤 해상도는 원본 크기를 덮어쓰면 안 되므로 끈다.
         resolution_choices = (
-            self.resolution_panel.aspect_random_choices() if self.image_source.size is None else ()
+            self.resolution_panel.aspect_random_choices() if self.locked_size() is None else ()
         )
         randomize_resolution = self.random_resolution_check.isChecked() and len(resolution_choices) >= 2
         request = GenerationRequest(
@@ -1432,6 +1605,9 @@ class MainWindow(QMainWindow):
             scheduler=self.scheduler_combo.currentText(),
             model=spec.key,
             uc_preset_id=uc_key,
+            # 품질 태그를 프롬프트에 붙이지 않으면 프리셋 식별자도 none이다 (웹 UI와 동일:
+            # 강화 요청 캡처는 qualityPresetId="none" / tag_hint_qt=0 이었다).
+            quality_preset_id="standard" if self.quality_check.isChecked() else "none",
             characters=self.character_prompts.captions(),
             use_coords=self.character_prompts.use_coords(),
             image=self.image_source.image_bytes,
@@ -1440,6 +1616,8 @@ class MainWindow(QMainWindow):
             noise=self.image_source.noise,
             add_original_image=self.image_source.add_original_image,
         )
+        if enhance:
+            request = self._with_enhance(request)
         return GenerationJob(
             request=request,
             count=count,
@@ -1454,6 +1632,63 @@ class MainWindow(QMainWindow):
             randomize_resolution=randomize_resolution,
             resolution_choices=resolution_choices,
         )
+
+    def _with_enhance(self, request: GenerationRequest) -> GenerationRequest:
+        """강화 패널이 원본을 들고 있으면 t2i 요청을 강화(i2i) 요청으로 바꾼다.
+
+        크기·프롬프트 꼬리·서버 업스케일 요청은 전부 `core/enhance.py`가 정한다.
+        """
+        plan = self.enhance_panel.plan()
+        image = self.enhance_panel.image_bytes
+        if plan is None or image is None:
+            return request
+        return apply_enhance(
+            request,
+            image=image,
+            plan=plan,
+            strength=self.enhance_panel.strength,
+            noise=self.enhance_panel.noise,
+        )
+
+    def _on_enhance_folder(self) -> None:
+        """폴더 대기열의 이미지를 한 장씩 강화한다 (V4.5의 벌크 강화).
+
+        이미지마다 크기도 프롬프트도 다르므로 하나의 요청을 반복할 수 없다 —
+        `GenerationJob.request_provider`로 장마다 요청을 새로 만든다.
+        """
+        tr = self._i18n.get_text
+        sources = self.enhance_panel.sources
+        if not sources:
+            QMessageBox.information(self, tr("errors.warning"), tr("enhance.folder_none"))
+            return
+
+        # 시작 전에 거른다 — 배율을 못 쓰는 크기가 섞여 있으면 Anlas를 쓰다 중간에 멈춘다.
+        amount = self.enhance_panel.amount
+        blocked = unusable_sources(sources, amount)
+        if blocked:
+            QMessageBox.warning(
+                self,
+                tr("errors.warning"),
+                tr("enhance.folder_blocked", len(blocked), len(sources), amount),
+            )
+            return
+
+        job = self.build_job(count=len(sources), enhance=False)
+        provider = build_enhance_provider(
+            job.request,  # 패널이 들고 있는 한 장이 아니라 대기열의 각 이미지로 강화한다
+            sources,
+            amount=self.enhance_panel.amount,
+            strength=self.enhance_panel.strength,
+            noise=self.enhance_panel.noise,
+            use_metadata=self.enhance_panel.use_metadata,
+        )
+        job = dataclasses.replace(
+            job,
+            request_provider=provider,
+            randomize_resolution=False,
+            resolution_choices=(),
+        )
+        self._start_job(job)
 
     def _on_generate_once(self) -> None:
         self._start_job(self.build_job(count=1))
@@ -1493,6 +1728,96 @@ class MainWindow(QMainWindow):
         # 첫 ImageStarted가 오기 전에도 즉시 반응을 보여준다
         self.status_label.setText(self._i18n.get_text("statusbar.generating"))
 
+    def _on_stop_clicked(self) -> None:
+        """세팅별 연속 생성 중이면 이번 이미지를 끝으로 순환도 멈춘다 (V4와 동일)."""
+        self._settings_batch_stop_requested = True
+        self._service.stop()
+
+    # ── 세팅별 연속 생성 (V4의 "세팅별 연속 생성") ──────────────
+
+    _SETTINGS_BATCH_MIN_FILES = 2
+
+    def _on_generate_by_settings(self) -> None:
+        """세팅 파일 2개 이상을 골라, 생성마다 다음 파일을 불러오며 순환 생성한다.
+
+        총 매수는 `count_spin`을 그대로 쓴다 (0 = 무제한, 일반 연속 생성과 같은 규칙).
+        각 세팅 파일로 만든 이미지는 `save_dir/<세팅 파일명>/`에 저장된다 (V4와 동일).
+        """
+        tr = self._i18n.get_text
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("errors.settings_load_caption"), self._settings.presets_dir, self._SETTINGS_FILE_FILTER
+        )
+        if not paths:
+            return
+        if len(paths) < self._SETTINGS_BATCH_MIN_FILES:
+            QMessageBox.information(self, tr("errors.warning"), tr("errors.settings_select_min_two"))
+            return
+
+        self._settings_batch_paths = paths
+        self._settings_batch_index = -1
+        self._settings_batch_total = self.count_spin.value()
+        self._settings_batch_completed = 0
+        self._settings_batch_stop_requested = False
+        if not self._advance_settings_batch():
+            self._settings_batch_paths = []
+
+    def _next_settings_batch_index(self) -> int:
+        """다음에 쓸 세팅 파일의 자리. 기본은 고른 순서대로, 옵션을 켜면 무작위.
+
+        무작위일 때 같은 파일이 연달아 두 번 나오지는 않게 한다 — 세팅을 여러 개
+        고른 이유가 번갈아 쓰려는 것이기 때문이다 (파일이 2개면 결국 번갈아 돈다).
+        """
+        total = len(self._settings_batch_paths)
+        if not self._settings.batch.random_settings_order or total < 2:
+            return (self._settings_batch_index + 1) % total
+        choices = [i for i in range(total) if i != self._settings_batch_index]
+        return random.choice(choices)
+
+    def _advance_settings_batch(self) -> bool:
+        """다음 세팅 파일을 불러와 적용하고 그 파일로 이미지 1장을 생성한다.
+
+        진행 중 이미지에는 영향이 없다 — 매 순환마다 새 `GenerationJob`(count=1)을
+        만들어 시작한다. 성공하면 True, 파일을 읽지 못하거나 이미 실행 중이면 False.
+        """
+        tr = self._i18n.get_text
+        self._settings_batch_index = self._next_settings_batch_index()
+        path = self._settings_batch_paths[self._settings_batch_index]
+
+        defaults = self._get_current_preset_config().model_dump()
+        try:
+            loaded = settings_file.load(Path(path), defaults=defaults)
+        except PresetError as e:
+            QMessageBox.warning(self, tr("errors.title"), str(e))
+            return False
+
+        self._on_preset_loaded(loaded.preset)
+        if loaded.seed is not None:
+            self.seed_random_check.setChecked(False)
+            self.seed_edit.setText(str(loaded.seed))
+
+        stem = Path(path).stem
+        job = self.build_job(count=1)
+        job = dataclasses.replace(job, save_dir=str(Path(job.save_dir) / stem))
+        try:
+            self._service.start(job)
+        except RuntimeError:
+            return False
+        self._set_running(True)
+        if self._settings_batch_total:
+            self.status_label.setText(
+                tr(
+                    "statusbar.by_settings_progress",
+                    self._settings_batch_completed + 1,
+                    self._settings_batch_total,
+                    stem,
+                )
+            )
+        else:
+            self.status_label.setText(
+                tr("statusbar.by_settings_progress_inf", self._settings_batch_completed + 1, stem)
+            )
+        return True
+
     def _set_running(self, running: bool) -> None:
         self._is_running = running
         self._refresh_generate_buttons()
@@ -1502,6 +1827,8 @@ class MainWindow(QMainWindow):
         can_start = not self._is_running and self._logged_in
         self.once_button.setEnabled(can_start)
         self.auto_button.setEnabled(can_start)
+        self.by_settings_button.setEnabled(can_start)
+        self.enhance_panel.set_busy(not can_start)
         self.stop_button.setEnabled(self._is_running)
         self._refresh_quick_buttons()
 
@@ -1527,18 +1854,39 @@ class MainWindow(QMainWindow):
             # 저장 위치를 바로 확인할 수 있게 파일명 표시 + 전체 경로 툴팁
             self.status_label.setToolTip(event.path)
             self.preview_label.setToolTip(event.path)
+            self.enhance_panel.set_last_result(event.path)  # "최근 결과" 버튼이 쓴다
             # M3: Gallery — 새 이미지 자동 추가
             if self._gallery_view is not None:
                 self._gallery_view.append_image(event.path)
         elif isinstance(event, JobFinished):
-            self._set_running(False)
-            if event.error is not None:
-                key = _ERROR_TYPE_TO_KEY.get(event.error_type or "", "errors.generation_error")
-                self.status_label.setText(tr("statusbar.job_error", tr(key)))
-            elif event.stopped:
-                self.status_label.setText(tr("statusbar.job_stopped", event.completed))
-            else:
-                self.status_label.setText(tr("statusbar.job_finished", event.completed))
+            continuing = False
+            in_settings_batch = bool(self._settings_batch_paths)
+            if in_settings_batch:
+                # 세팅별 연속 생성 도중 — 이 잡은 세팅 파일 하나로 만든 이미지 1장이다.
+                stopped = event.stopped or self._settings_batch_stop_requested
+                if event.error is None and not stopped:
+                    self._settings_batch_completed += 1
+                    more = (
+                        self._settings_batch_total == 0
+                        or self._settings_batch_completed < self._settings_batch_total
+                    )
+                    continuing = more
+                if not continuing:
+                    self._settings_batch_paths = []
+                    # 총 진행량은 이번 잡의 1장이 아니라 순환 전체의 누적 매수다.
+                    event = dataclasses.replace(
+                        event, completed=self._settings_batch_completed, stopped=stopped
+                    )
+
+            if not continuing:
+                self._set_running(False)
+                if event.error is not None:
+                    key = _ERROR_TYPE_TO_KEY.get(event.error_type or "", "errors.generation_error")
+                    self.status_label.setText(tr("statusbar.job_error", tr(key)))
+                elif event.stopped:
+                    self.status_label.setText(tr("statusbar.job_stopped", event.completed))
+                else:
+                    self.status_label.setText(tr("statusbar.job_finished", event.completed))
             # M3: Credit Estimator — compute and store batch cost from observations
             if event.credit_observations and event.completed > 0:
                 size = self.target_size()
@@ -1564,6 +1912,30 @@ class MainWindow(QMainWindow):
                     latest_percent = observations[-1].percent
                     self._update_credit_gauge(latest_percent)
             self.refresh_anlas()
+
+            if continuing:
+                # 일반 연속 생성과 같은 간격 규칙을 세팅 파일이 바뀌는 순간에도 지킨다.
+                # count=1짜리 개별 잡은 자기 안에서 대기하지 않으므로 여기서 직접 기다린다.
+                delay_ms = int(self.delay_spin.value() * 1000)
+                if delay_ms > 0:
+                    QTimer.singleShot(delay_ms, self._advance_settings_batch_after_delay)
+                else:
+                    self._advance_settings_batch_after_delay()
+
+    def _advance_settings_batch_after_delay(self) -> None:
+        """세팅별 연속 생성 간격 대기 후 호출 — 그사이 중지됐으면 순환을 끝낸다."""
+        if not shiboken6.isValid(self):
+            return  # 대기 중 창이 닫힌 경우 — QTimer가 죽은 위젯을 참조하면 세그폴트로 이어진다
+        if not self._settings_batch_paths:
+            return  # 대기 중 중지되었거나 이미 정리된 경우
+        if self._settings_batch_stop_requested or not self._advance_settings_batch():
+            self._settings_batch_paths = []
+            self._set_running(False)
+            tr = self._i18n.get_text
+            if self._settings_batch_stop_requested:
+                self.status_label.setText(tr("statusbar.job_stopped", self._settings_batch_completed))
+            else:
+                self.status_label.setText(tr("statusbar.job_finished", self._settings_batch_completed))
 
     def _show_image(self, path: str) -> None:
         pixmap = QPixmap(path)
@@ -1722,11 +2094,14 @@ class MainWindow(QMainWindow):
         self._refresh_quick_buttons()
         self.once_button.setText(tr("generate.once"))
         self.auto_button.setText(tr("generate.auto"))
+        self.by_settings_button.setText(tr("generate.by_settings"))
         self.stop_button.setText(tr("generate.stop"))
         self.character_prompts.retranslate()
         self.image_source.retranslate()
+        self.enhance_panel.retranslate()
         self.file_menu.setTitle(tr("menu.file"))
         self.login_action.setText(tr("menu.login"))
+        self.accounts_action.setText(tr("menu.accounts"))
         self.login_label.setText(
             tr("statusbar.logged_in") if self._logged_in else tr("statusbar.before_login")
         )
@@ -1738,6 +2113,7 @@ class MainWindow(QMainWindow):
         self.result_panel_action.setText(tr("menu.toggle_panel"))
         self.reset_layout_action.setText(tr("menu.reset_layout"))
         self.image_source_action.setText(tr("image_source.menu"))
+        self.enhance_action.setText(tr("enhance.menu"))
         self.tools_menu.setTitle(tr("menu.tools"))
         self.log_action.setText(tr("logs.menu"))
         self.measure_credit_action.setText(tr("logs.measure_credit"))
@@ -1761,3 +2137,10 @@ class MainWindow(QMainWindow):
 
     _job_total: int | None = None
     _is_running: bool = False
+
+    # ── 세팅별 연속 생성 (V4 parity) — `_settings_batch_paths`는 리스트라
+    # 클래스 속성 기본값으로 두면 인스턴스끼리 공유되므로 `__init__`에서 초기화한다.
+    _settings_batch_index: int = -1
+    _settings_batch_total: int = 0
+    _settings_batch_completed: int = 0
+    _settings_batch_stop_requested: bool = False

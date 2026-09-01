@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nai-auto-v5"
-version = "0.1.0"
+version = "0.6.8"
 description = "NovelAI Diffusion V5 image generation automation app (PySide6)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,6 +17,10 @@ dependencies = [
     "Pillow>=10.0",
     "pydantic>=2.0",
     "platformdirs>=4.0",
+    # WD14 자동 태깅 — 이 둘이 빠지면 배포본에서 기능 자체가 뜨지 않는다
+    # (v0.6.5까지 선택 의존성이라 exe로 받은 사용자는 쓸 수 없었다).
+    "numpy>=1.24",
+    "onnxruntime>=1.17",
 ]
 
 [project.optional-dependencies]
