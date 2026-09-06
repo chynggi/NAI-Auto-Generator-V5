@@ -33,6 +33,7 @@ __all__ = [
     "parse_preset",
     "load_target_presets",
     "find_target",
+    "load_lora_registry",
 ]
 
 #: NovelAI 타깃 id — 코드 내장 상수 프리셋이며 JSON으로 덮어쓸 수 없다.
@@ -198,3 +199,53 @@ def find_target(presets: tuple[TargetPreset, ...], target_id: str) -> TargetPres
     if target_id and target_id != NOVELAI_TARGET_ID:
         logger.warning("unknown target %r, falling back to novelai", target_id)
     return NOVELAI_PRESET
+
+
+def _parse_lora(entry_id: str, data: object) -> LoraEntry:
+    """레지스트리 항목 1개 → ``LoraEntry``. 위반 시 ``TargetPresetError``."""
+    if not isinstance(data, dict):
+        raise TargetPresetError("lora entry must be a JSON object")
+    file = str(data.get("file", "")).strip()
+    if not file:
+        raise TargetPresetError("lora entry needs a non-empty 'file'")
+    weight = data.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise TargetPresetError("'weight' must be a number")
+    triggers = data.get("triggers", [])
+    if not isinstance(triggers, list) or any(not isinstance(t, str) for t in triggers):
+        raise TargetPresetError("'triggers' must be a list of strings")
+    return LoraEntry(
+        id=entry_id,
+        file=file,
+        weight=float(weight),
+        triggers=tuple(t.strip() for t in triggers if t.strip()),
+    )
+
+
+def load_lora_registry(user_dir: str | Path | None) -> dict[str, LoraEntry]:
+    """사용자 폴더의 ``loras.json`` → {id: LoraEntry}.
+
+    폴더/파일 없음, JSON 파손 → 빈 dict (LoRA 기능 비활성). 개별 항목이
+    깨진 경우 그 항목만 건너뛰고 나머지는 살린다.
+    """
+    text = str(user_dir).strip() if user_dir is not None else ""
+    if not text:
+        return {}
+    path = Path(text) / LORA_REGISTRY_FILENAME
+    try:
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        logger.warning("lora registry broken, ignoring %s: %s", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("lora registry must be a JSON object: %s", path)
+        return {}
+    registry: dict[str, LoraEntry] = {}
+    for entry_id, raw in data.items():
+        try:
+            registry[str(entry_id)] = _parse_lora(str(entry_id), raw)
+        except TargetPresetError as exc:
+            logger.warning("skipping lora entry %r in %s: %s", entry_id, path, exc)
+    return registry

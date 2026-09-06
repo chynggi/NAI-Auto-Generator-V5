@@ -13,6 +13,7 @@ from naiauto.core.prompt.targets import (
     TargetPreset,
     builtin_targets_dir,
     find_target,
+    load_lora_registry,
     load_target_presets,
     parse_preset,
 )
@@ -180,3 +181,91 @@ def test_lora_registry_file_is_not_read_as_preset(tmp_path, caplog):
 
 def test_lora_entry_stem_drops_extension():
     assert LoraEntry(id="k", file="kafka_illustrious.safetensors").stem == "kafka_illustrious"
+
+
+# --- LoRA 레지스트리 -------------------------------------------------------
+
+
+def test_lora_registry_missing_dir_is_empty():
+    assert load_lora_registry(None) == {}
+
+
+def test_lora_registry_missing_file_is_empty(tmp_path):
+    assert load_lora_registry(tmp_path) == {}
+
+
+def test_lora_registry_reads_entries(tmp_path):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text(
+        json.dumps(
+            {
+                "kafka": {
+                    "file": "kafka_illustrious.safetensors",
+                    "weight": 0.8,
+                    "triggers": ["kafka", "purple hair"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = load_lora_registry(tmp_path)
+    assert registry["kafka"] == LoraEntry(
+        id="kafka",
+        file="kafka_illustrious.safetensors",
+        weight=0.8,
+        triggers=("kafka", "purple hair"),
+    )
+    assert registry["kafka"].stem == "kafka_illustrious"
+
+
+def test_lora_registry_applies_defaults(tmp_path):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text(
+        json.dumps({"bare": {"file": "bare.safetensors"}}), encoding="utf-8"
+    )
+    entry = load_lora_registry(tmp_path)["bare"]
+    assert entry.weight == 1.0
+    assert entry.triggers == ()
+
+
+def test_lora_registry_skips_broken_entries_keeps_good(tmp_path):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text(
+        json.dumps(
+            {
+                "no_file": {"weight": 1.0},
+                "bad_weight": {"file": "x.safetensors", "weight": "heavy"},
+                "bad_triggers": {"file": "y.safetensors", "triggers": "not a list"},
+                "good": {"file": "good.safetensors"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = load_lora_registry(tmp_path)
+    assert set(registry) == {"good"}
+
+
+def test_lora_registry_broken_json_is_empty(tmp_path):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text("{ not json", encoding="utf-8")
+    assert load_lora_registry(tmp_path) == {}
+
+
+def test_lora_registry_top_level_list_is_empty(tmp_path):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text('["not", "an object"]', encoding="utf-8")
+    assert load_lora_registry(tmp_path) == {}
+
+
+def test_lora_registry_rejects_bool_weight(tmp_path):
+    """bool은 int의 하위 타입이라 명시적으로 걸러야 한다 (mask_size와 같은 이유)."""
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text(
+        json.dumps({"b": {"file": "b.safetensors", "weight": True}}), encoding="utf-8"
+    )
+    assert load_lora_registry(tmp_path) == {}
+
+
+def test_lora_registry_unreadable_dir_is_empty(tmp_path, monkeypatch):
+    """읽을 수 없는 폴더가 앱 기동을 막지 않는다."""
+    from pathlib import Path
+
+    def _boom(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "is_file", _boom)
+    assert load_lora_registry(tmp_path) == {}
