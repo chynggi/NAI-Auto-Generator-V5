@@ -472,6 +472,21 @@ def test_couple_mask_three_way_coordinates():
     ]
 
 
+def test_couple_mask_empty_global_line_has_no_trailing_space():
+    """전역 태그가 하나도 없어도 MASK_SIZE 뒤에 공백만 남으면 안 된다."""
+    preset = TargetPreset(id="p", name="P")  # quality_prefix 없음
+    positive, _ = emit_couple_mask(
+        compiled(
+            scene_tags=(),
+            characters=(char("c1", ["a"], cx=0.3), char("c2", ["b"], cx=0.7)),
+        ),
+        preset,
+        {},
+        resolution=(832, 1216),
+    )
+    assert positive.splitlines()[0] == "MASK_SIZE(832, 1216)"
+
+
 # --- emit_regional_json ----------------------------------------------------
 
 
@@ -585,3 +600,23 @@ def test_regional_json_is_json_serialisable():
         compiled(characters=(char("c1", ["a"], cx=0.5),)), PRESET, {"c1": entry}
     )
     assert json.loads(json.dumps(data)) == data
+
+
+def test_regional_json_regions_tile_without_gaps():
+    """영역이 맞닿아야 한다 — x + width가 다음 x와 정확히 같아야 한다."""
+    data = emit_regional_json(
+        compiled(
+            characters=(
+                char("c1", ["a"], cx=0.15),
+                char("c2", ["b"], cx=0.5),
+                char("c3", ["c"], cx=0.85),
+            )
+        ),
+        PRESET,
+        {},
+    )
+    regions = data["regions"]
+    for left, right in zip(regions, regions[1:], strict=False):
+        assert round(left["x"] + left["width"], 4) == right["x"]
+    last = regions[-1]
+    assert round(last["x"] + last["width"], 4) == 1.0

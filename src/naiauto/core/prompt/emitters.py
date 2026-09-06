@@ -240,6 +240,9 @@ def _global_tags(
 def _trailing_tags(compiled: CompiledPrompt, preset: TargetPreset) -> list[str]:
     """캐릭터 블록 뒤에 오는 것: 씬 태그 + 관계 태그 + camera/style + NL + 품질 서픽스."""
     tags = _scene_tags(compiled)
+    # 경고는 버린다 — 컴파일러가 로컬 타겟 조립 시 relationship_tags를 별도로
+    # 호출해 CompiledPrompt.warnings로 다시 채우고 UI가 그걸 보여준다. emitter는
+    # 순수 문자열/dict 함수로 남기고, 경고 채널 하나 때문에 시그니처를 바꾸지 않는다.
     rel_tags, _ = relationship_tags(compiled.relationships)
     tags.extend(rel_tags)
     tags.extend(_style_tags(compiled))
@@ -308,7 +311,9 @@ def emit_couple_mask(
 
     size = preset.mask_size or resolution
     if size is not None:
-        global_line = f"MASK_SIZE({size[0]}, {size[1]}) {global_line}"
+        mask_size = f"MASK_SIZE({size[0]}, {size[1]})"
+        # 전역 태그가 하나도 없을 수 있다 — 그때 공백만 남지 않도록 이어 붙인다.
+        global_line = f"{mask_size} {global_line}" if global_line else mask_size
 
     lines = [global_line]
     for region in regions:
@@ -333,6 +338,12 @@ def emit_regional_json(
     LoRA는 ``positive``에 합치지 않고 ``lora`` 키로 분리해 둔다 — 소비하는
     쪽이 LoraLoader 노드로 결선할지 텍스트 태그로 넘길지 고를 수 있어야 한다.
     전역 프롬프트에도 ``<lora:...>`` 태그를 넣지 않는 이유가 같다.
+
+    ``x``/``y``/``width``/``height``는 소수점 4자리로 반올림한다 — 개별 값이
+    아니라 반올림한 경계(좌/우/상/하)에서 역산하므로, 인접 영역이 정확히
+    맞닿는다 (``x + width``가 다음 영역의 ``x``와 정확히 같다). ``center_x``/
+    ``center_y``는 호출자가 준 값을 그대로 통과시킨다 — 여기서 계산하는 값이
+    아니라서 반올림하지 않는다.
     """
     loras = loras or {}
     global_tags = _global_tags(compiled, preset, {})  # LoRA 태그 제외
@@ -341,14 +352,18 @@ def emit_regional_json(
     for region in character_regions(compiled.characters):
         char = region.character
         entry = loras.get(char.id)
+        left = round(region.x, 4)
+        top = round(region.y, 4)
+        right = round(region.x + region.width, 4)
+        bottom = round(region.y + region.height, 4)
         item: dict = {
             "id": char.id,
             "positive": _finalize([ref.tag for ref in char.tags], preset),
             "negative": _finalize(list(char.negative_tags), preset),
-            "x": round(region.x, 4),
-            "y": round(region.y, 4),
-            "width": round(region.width, 4),
-            "height": round(region.height, 4),
+            "x": left,
+            "y": top,
+            "width": round(right - left, 4),
+            "height": round(bottom - top, 4),
             "center_x": char.center_x,
             "center_y": char.center_y,
         }
