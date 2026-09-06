@@ -1,0 +1,12 @@
+{
+  "id": "sdxl_base",
+  "name": "SDXL (generic)",
+  "quality_prefix": ["masterpiece", "best quality", "highly detailed"],
+  "quality_suffix": [],
+  "default_negative": ["lowres", "worst quality", "low quality", "watermark", "signature"],
+  "weight_syntax": "a1111",
+  "flatten": "sequential",
+  "position_tags": true,
+  "natural_language": "append",
+  "underscore_to_space": true
+}
