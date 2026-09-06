@@ -245,3 +245,139 @@ def test_history_combo_select_restores_modify_fields(qapp, tmp_path):
     assert dialog._existing_edit.toPlainText() == "1girl, cafe"
     assert dialog._instruction_edit.toPlainText() == "배경을 밤으로"
     dialog.close()
+
+
+# --- 출력 타깃 -------------------------------------------------------------
+# 위 히스토리 테스트가 쓰는 _dialog(qapp, tmp_path)와 시그니처가 달라 이름을
+# 따로 둔다 — 같은 이름으로 덮으면 앞선 테스트들이 깨진다.
+
+
+def _target_dialog(tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    return PromptCompilerDialog(
+        I18nManager(),
+        AppSettings(),
+        history=PromptInputHistory(path=tmp_path / "history.json"),
+    )
+
+
+def _local_compiled(target="illustrious"):
+    from naiauto.core.prompt.schema import (
+        CharacterPrompt,
+        CompiledPrompt,
+        ScenePrompt,
+        TagRef,
+    )
+
+    return CompiledPrompt(
+        base_prompt="masterpiece, 2girls, rain",
+        negative_prompt="lowres",
+        scene=ScenePrompt(tags=(TagRef("rain"),), subjects=("girl", "girl")),
+        characters=(
+            CharacterPrompt(id="c1", tags=(TagRef("silver_hair"),), center_x=0.3, center_y=0.5),
+            CharacterPrompt(id="c2", tags=(TagRef("black_hair"),), center_x=0.7, center_y=0.5),
+        ),
+        relationships=(),
+        mode="hybrid",
+        warnings=(),
+        unresolved=(),
+        target=target,
+    )
+
+
+def test_target_combo_lists_novelai_and_builtin_presets(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    values = [dialog.target_combo.itemData(i) for i in range(dialog.target_combo.count())]
+    assert values[0] == "novelai"
+    assert "illustrious" in values
+    dialog.close()
+
+
+def test_target_combo_defaults_from_settings(qapp, tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    settings = AppSettings()
+    settings.compiler.default_target = "illustrious"
+    dialog = PromptCompilerDialog(
+        I18nManager(),
+        settings,
+        history=PromptInputHistory(path=tmp_path / "h.json"),
+    )
+    assert dialog.target_combo.currentData() == "illustrious"
+    dialog.close()
+
+
+def test_novelai_target_hides_local_tabs(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    assert dialog._result_tabs.count() == 1
+    dialog.close()
+
+
+def test_local_target_shows_three_result_tabs(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    assert dialog._result_tabs.count() == 3
+    dialog.close()
+
+
+def test_local_target_renders_couple_mask_and_json(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert "COUPLE MASK(0 0.5, 0 1)" in dialog._couple_edit.toPlainText()
+    data = json.loads(dialog._json_edit.toPlainText())
+    assert [r["id"] for r in data["regions"]] == ["c1", "c2"]
+    dialog.close()
+
+
+def test_novelai_target_leaves_local_editors_empty(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    assert dialog._couple_edit.toPlainText() == ""
+    assert dialog._json_edit.toPlainText() == ""
+    dialog.close()
+
+
+def test_switching_back_to_novelai_clears_stale_local_output(qapp, tmp_path):
+    """로컬 결과를 본 뒤 NovelAI로 돌아가면 낡은 COUPLE 문자열이 남으면 안 된다."""
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert dialog._couple_edit.toPlainText() != ""
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    assert dialog._couple_edit.toPlainText() == ""
+    assert dialog._json_edit.toPlainText() == ""
+    dialog.close()
+
+
+def test_local_target_apply_sends_no_characters(qapp, tmp_path):
+    received = []
+    dialog = _target_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._on_apply("apply")
+    assert received[0].characters == ()
+    assert received[0].prompt == "masterpiece, 2girls, rain"
+
+
+def test_novelai_target_apply_still_sends_characters(qapp, tmp_path):
+    received = []
+    dialog = _target_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    dialog._on_apply("apply")
+    assert len(received[0].characters) == 2
+    dialog.close()
