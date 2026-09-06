@@ -67,4 +67,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m \"not comfy_live\""
+markers = [
+    "comfy_live: 실제 ComfyUI 서버가 필요한 테스트 (기본 실행에서 제외)",
+]
