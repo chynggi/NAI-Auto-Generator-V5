@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from naiauto.core.api.models import CharacterCaption
 from naiauto.core.prompt.schema import CompiledPrompt
+from naiauto.core.prompt.targets import NOVELAI_TARGET_ID
 
 __all__ = ["MergeResult", "to_generation_data", "merge_negatives"]
 
@@ -56,7 +57,18 @@ def to_generation_data(compiled: CompiledPrompt, *, existing_negative: str = "")
       좌표 미지정은 client가 0.5로 강제하는 기존 규칙을 그대로 따른다.
       ``prompt_text``가 비어 있으면(수동 구성 등) verified/inferred 태그를
       ", "로 이어붙인 것으로 대체한다.
+
+    ``compiled.target``이 "novelai"가 아니면 ``characters``는 항상 빈 튜플이다.
     """
+    # 로컬 타깃은 캐릭터별 프롬프트 개념이 없다 — 캐릭터 태그는 이미 본문에
+    # 합쳐져 있으므로 CharacterCaption을 만들지 않는다.
+    if compiled.target != NOVELAI_TARGET_ID:
+        return MergeResult(
+            prompt=compiled.base_prompt,
+            negative_prompt=merge_negatives(existing_negative, compiled.negative_prompt),
+            characters=(),
+        )
+
     characters = tuple(
         CharacterCaption(
             prompt=char.prompt_text

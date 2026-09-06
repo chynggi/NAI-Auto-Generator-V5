@@ -8,18 +8,22 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 import shiboken6
 from PySide6.QtCore import Qt, Signal, SignalInstance
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -33,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from naiauto.core.prompt.compiler import PromptCompiler, build_compiler
+from naiauto.core.prompt.emitters import emit_couple_mask, emit_regional_json, emit_sequential
 from naiauto.core.prompt.errors import (
     CompilerAuthError,
     CompilerEmptyResultError,
@@ -48,6 +53,7 @@ from naiauto.core.prompt.history import (
 )
 from naiauto.core.prompt.merge import to_generation_data
 from naiauto.core.prompt.schema import DEFAULT_MODE, MODE_TAGS, CompiledPrompt
+from naiauto.core.prompt.targets import NOVELAI_TARGET_ID, find_target
 
 if TYPE_CHECKING:
     from naiauto.core.api.models import CharacterCaption
@@ -76,6 +82,9 @@ class _ConvertInputs:
     instruction: str
     text: str
     mode: str
+    target: str = "novelai"
+    character_loras: dict = field(default_factory=dict)
+    resolution: tuple[int, int] | None = None
 
 
 def _error_key_for(error: CompilerError) -> str:
@@ -128,11 +137,15 @@ class PromptCompilerDialog(QDialog):
         self._history = history if history is not None else PromptInputHistory(path=default_history_path())
         self._history.load()
         self._history_restoring = False
+        #: 캐릭터 id → LoRA 선택 콤보 / 가중치 스핀박스 (로컬 타깃에서만 만든다).
+        self._lora_combos: dict[str, QComboBox] = {}
+        self._lora_weights: dict[str, QDoubleSpinBox] = {}
 
         self.setMinimumSize(720, 560)
         self._build_ui()
         self.retranslate()
         self._apply_default_mode()
+        self._apply_default_target()  # retranslate가 콤보를 채운 뒤여야 findData가 먹는다
         self._set_result_buttons(False)
         self.cancel_button.setEnabled(False)
         self.regenerate_button.setEnabled(False)
@@ -155,6 +168,12 @@ class PromptCompilerDialog(QDialog):
         control_row.addWidget(self._mode_label)
         self.mode_combo = QComboBox()
         control_row.addWidget(self.mode_combo)
+        # 출력 타깃: NovelAI(기존 경로) 또는 로컬 SDXL 프리셋.
+        self._target_label = QLabel()
+        control_row.addWidget(self._target_label)
+        self.target_combo = QComboBox()
+        self.target_combo.currentIndexChanged.connect(self._on_target_changed)
+        control_row.addWidget(self.target_combo)
         control_row.addStretch(1)
         self.convert_button = QPushButton()
         self.convert_button.clicked.connect(self._on_convert)
@@ -205,12 +224,54 @@ class PromptCompilerDialog(QDialog):
         right_layout = QVBoxLayout(right_panel)
         self._final_label = QLabel()
         right_layout.addWidget(self._final_label)
+        # 결과 탭: 프롬프트(기존 편집기) | COUPLE MASK | 영역 JSON.
+        # 첫 탭이 기존 _final_edit을 그대로 담으므로 Apply 경로는 바뀌지 않는다.
+        self._result_tabs = QTabWidget()
         self._final_edit = QPlainTextEdit()
-        right_layout.addWidget(self._final_edit)
+        self._result_tabs.addTab(self._final_edit, "")
+
+        # 로컬 전용 페이지는 탭에서 빠져도 파괴되지 않게 다이얼로그를 부모로 둔다
+        # (removeTab은 페이지를 소유권만 놓아 줄 뿐 삭제하지 않지만, 부모가 없으면
+        # 파이썬 참조만 남은 top-level 위젯이 되어 잠깐 창으로 뜰 수 있다).
+        self._couple_page = QWidget(self)
+        couple_layout = QVBoxLayout(self._couple_page)
+        self._couple_hint_label = QLabel()
+        self._couple_hint_label.setWordWrap(True)
+        couple_layout.addWidget(self._couple_hint_label)
+        self._couple_edit = QPlainTextEdit()
+        self._couple_edit.setReadOnly(True)
+        couple_layout.addWidget(self._couple_edit)
+        self._couple_copy_button = QPushButton()
+        self._couple_copy_button.clicked.connect(
+            lambda: self._copy_to_clipboard(self._couple_edit.toPlainText())
+        )
+        couple_layout.addWidget(self._couple_copy_button)
+
+        self._json_page = QWidget(self)
+        json_layout = QVBoxLayout(self._json_page)
+        self._json_edit = QPlainTextEdit()
+        self._json_edit.setReadOnly(True)
+        json_layout.addWidget(self._json_edit)
+        self._json_copy_button = QPushButton()
+        self._json_copy_button.clicked.connect(
+            lambda: self._copy_to_clipboard(self._json_edit.toPlainText())
+        )
+        json_layout.addWidget(self._json_copy_button)
+
+        self._local_hint_label = QLabel()
+        self._local_hint_label.setWordWrap(True)
+        right_layout.addWidget(self._result_tabs)
+        right_layout.addWidget(self._local_hint_label)
         self._result_splitter.addWidget(right_panel)
         self._result_splitter.setStretchFactor(0, 1)
         self._result_splitter.setStretchFactor(1, 1)
         layout.addWidget(self._result_splitter, stretch=2)
+
+        # 캐릭터별 LoRA — 로컬 타깃 + loras.json이 있을 때만 보인다.
+        self._lora_group = QGroupBox()
+        self._lora_layout = QVBoxLayout(self._lora_group)
+        self._lora_group.setVisible(False)
+        layout.addWidget(self._lora_group)
 
         # 네거티브 (compiled negative 표시, 편집 가능)
         self._negative_label = QLabel()
@@ -253,6 +314,25 @@ class PromptCompilerDialog(QDialog):
             self.mode_combo.addItem(tr(f"compiler.mode_{mode}"), mode)
         index = self.mode_combo.findData(current if current in MODE_TAGS else DEFAULT_MODE)
         self.mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._target_label.setText(tr("compiler.target"))
+        current_target = self.target_combo.currentData()
+        # 재구성 중 currentIndexChanged가 튀면 탭이 잠깐 붙었다 떨어진다 — 막는다.
+        self.target_combo.blockSignals(True)
+        self.target_combo.clear()
+        for preset in self._compiler.target_presets:
+            label = tr("compiler.target_novelai") if preset.id == NOVELAI_TARGET_ID else preset.name
+            self.target_combo.addItem(label, preset.id)
+        target_index = self.target_combo.findData(current_target)
+        self.target_combo.setCurrentIndex(target_index if target_index >= 0 else 0)
+        self.target_combo.blockSignals(False)
+        self._result_tabs.setTabText(0, tr("compiler.tab_prompt"))
+        if self._result_tabs.count() == 3:
+            self._result_tabs.setTabText(1, tr("compiler.tab_couple_mask"))
+            self._result_tabs.setTabText(2, tr("compiler.tab_regional_json"))
+        self._couple_hint_label.setText(tr("compiler.couple_mask_hint"))
+        self._local_hint_label.setText(tr("compiler.local_hint"))
+        self._couple_copy_button.setText(tr("compiler.copy"))
+        self._json_copy_button.setText(tr("compiler.copy"))
         self.convert_button.setText(tr("compiler.convert"))
         self.cancel_button.setText(tr("compiler.cancel"))
         self.regenerate_button.setText(tr("compiler.regenerate"))
@@ -300,6 +380,68 @@ class PromptCompilerDialog(QDialog):
             default = DEFAULT_MODE
         self.mode_combo.setCurrentIndex(self.mode_combo.findData(default))
 
+    def _apply_default_target(self) -> None:
+        """설정의 default_target으로 콤보를 맞춘다 (없는 id면 novelai)."""
+        default = getattr(self._settings.compiler, "default_target", NOVELAI_TARGET_ID)
+        index = self.target_combo.findData(default)
+        self.target_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._on_target_changed()
+
+    def _target(self) -> str:
+        data = self.target_combo.currentData()
+        return str(data) if data else NOVELAI_TARGET_ID
+
+    def _is_local_target(self) -> bool:
+        return self._target() != NOVELAI_TARGET_ID
+
+    def _on_target_changed(self, _index: int = 0) -> None:
+        """로컬 타깃일 때만 COUPLE MASK/영역 JSON 탭과 안내를 보인다."""
+        local = self._is_local_target()
+        if local:
+            if self._result_tabs.count() == 1:
+                tr = self._i18n.get_text
+                self._result_tabs.addTab(self._couple_page, tr("compiler.tab_couple_mask"))
+                self._result_tabs.addTab(self._json_page, tr("compiler.tab_regional_json"))
+        else:
+            # 탭만 떼는 게 아니라 편집기도 비운다 — 안 그러면 NovelAI로 돌아온 뒤에도
+            # 직전 로컬 결과 문자열이 남아 클립보드로 새어 나간다.
+            while self._result_tabs.count() > 1:
+                self._result_tabs.removeTab(1)
+            self._couple_edit.clear()
+            self._json_edit.clear()
+        self._local_hint_label.setVisible(local)
+        self._update_lora_visibility()
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """텍스트를 클립보드에 넣고 상태줄에 알린다."""
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self._status_label.setText(self._i18n.get_text("compiler.copied"))
+
+    def _resolution(self) -> tuple[int, int] | None:
+        """couple_mask의 MASK_SIZE에 쓸 현재 생성 해상도."""
+        generation = getattr(self._settings, "generation", None)
+        width = int(getattr(generation, "width", 0) or 0)
+        height = int(getattr(generation, "height", 0) or 0)
+        return (width, height) if width > 0 and height > 0 else None
+
+    def _character_loras(self) -> dict:
+        """캐릭터 id → LoraEntry (다이얼로그 선택 스냅숏).
+
+        레지스트리에 없는 id는 조용히 버린다 (레지스트리 파일이 바뀐 경우).
+        """
+        selected: dict = {}
+        for char_id, combo in self._lora_combos.items():
+            entry_id = combo.currentData()
+            if not entry_id:
+                continue
+            entry = self._compiler.lora_registry.get(entry_id)
+            if entry is None:
+                continue
+            selected[char_id] = replace(entry, weight=self._lora_weights[char_id].value())
+        return selected
+
     def _mode(self) -> str:
         return str(self.mode_combo.currentData())
 
@@ -333,6 +475,10 @@ class PromptCompilerDialog(QDialog):
                 instruction=instruction,
                 text=text,
                 mode=self._mode(),
+                # 위젯/설정을 읽는 값은 여기 GUI 스레드에서만 스냅숏한다.
+                target=self._target(),
+                character_loras=self._character_loras(),
+                resolution=self._resolution(),
             )
             self._last_run = inputs
 
@@ -354,10 +500,21 @@ class PromptCompilerDialog(QDialog):
         try:
             if inputs.modify:
                 compiled = self._compiler.modify(
-                    inputs.existing, inputs.instruction, mode=inputs.mode
+                    inputs.existing,
+                    inputs.instruction,
+                    mode=inputs.mode,
+                    target=inputs.target,
+                    character_loras=inputs.character_loras,
+                    resolution=inputs.resolution,
                 )
             else:
-                compiled = self._compiler.compile(inputs.text, mode=inputs.mode)
+                compiled = self._compiler.compile(
+                    inputs.text,
+                    mode=inputs.mode,
+                    target=inputs.target,
+                    character_loras=inputs.character_loras,
+                    resolution=inputs.resolution,
+                )
         except CompilerError as exc:
             self._emit_safely(self._converted_failed, None, exc)
             return
@@ -425,6 +582,7 @@ class PromptCompilerDialog(QDialog):
             existing_prompt=inputs.existing,
             instruction=inputs.instruction,
             mode=inputs.mode,
+            target=inputs.target,
             ts=time.time(),
         )
 
@@ -462,6 +620,9 @@ class PromptCompilerDialog(QDialog):
         index = self.mode_combo.findData(entry.mode)
         if index >= 0:
             self.mode_combo.setCurrentIndex(index)
+        target_index = self.target_combo.findData(entry.target)
+        if target_index >= 0:
+            self.target_combo.setCurrentIndex(target_index)
 
     def _set_conversion_idle(self) -> None:
         """변환 종료(성공/실패/취소) 후 컨트롤을 복구한다."""
@@ -535,6 +696,124 @@ class PromptCompilerDialog(QDialog):
         self._preview_browser.setPlainText("\n".join(lines).strip("\n"))
         self._final_edit.setPlainText(compiled.base_prompt)
         self._negative_edit.setPlainText(compiled.negative_prompt)
+        # 행이 먼저 있어야 _render_local_outputs가 현재 선택을 읽을 수 있다.
+        self._rebuild_lora_rows(compiled)
+        self._render_local_outputs(compiled)
+
+    def _render_local_outputs(self, compiled: CompiledPrompt) -> None:
+        """로컬 타깃일 때만 COUPLE MASK/영역 JSON 탭을 채운다."""
+        if compiled.target == NOVELAI_TARGET_ID:
+            self._couple_edit.clear()
+            self._json_edit.clear()
+            return
+        preset = find_target(self._compiler.target_presets, compiled.target)
+        loras = self._character_loras()
+        couple, _ = emit_couple_mask(compiled, preset, loras, resolution=self._resolution())
+        self._couple_edit.setPlainText(couple)
+        self._json_edit.setPlainText(
+            json.dumps(emit_regional_json(compiled, preset, loras), ensure_ascii=False, indent=2)
+        )
+
+    def _update_lora_visibility(self) -> None:
+        """로컬 타깃 + 레지스트리가 있을 때만 LoRA 그룹을 보인다."""
+        has_registry = bool(self._compiler.lora_registry)
+        self._lora_group.setVisible(self._is_local_target() and has_registry)
+
+    def _rebuild_lora_rows(self, compiled: CompiledPrompt) -> None:
+        """컴파일 결과의 캐릭터마다 LoRA 행을 만든다 (id 기준으로 선택 유지)."""
+        tr = self._i18n.get_text
+        self._lora_group.setTitle(tr("compiler.lora"))
+        previous = {
+            char_id: (combo.currentData(), self._lora_weights[char_id].value())
+            for char_id, combo in self._lora_combos.items()
+        }
+        while self._lora_layout.count():
+            item = self._lora_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._lora_combos.clear()
+        self._lora_weights.clear()
+
+        if compiled.target == NOVELAI_TARGET_ID or not self._compiler.lora_registry:
+            self._update_lora_visibility()
+            return
+
+        for char in compiled.characters:
+            row_widget = QWidget(self._lora_group)
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(QLabel(char.id))
+            combo = QComboBox()
+            combo.addItem(tr("compiler.lora_none"), None)
+            for entry_id in sorted(self._compiler.lora_registry):
+                combo.addItem(entry_id, entry_id)
+            row.addWidget(combo, stretch=1)
+            row.addWidget(QLabel(tr("compiler.lora_weight")))
+            weight = QDoubleSpinBox()
+            weight.setRange(0.0, 2.0)
+            weight.setSingleStep(0.05)
+            weight.setDecimals(2)
+            row.addWidget(weight)
+
+            saved_id, saved_weight = previous.get(char.id, (None, None))
+            index = combo.findData(saved_id) if saved_id else 0
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            if saved_weight is not None:
+                weight.setValue(saved_weight)
+            elif saved_id:
+                weight.setValue(self._compiler.lora_registry[saved_id].weight)
+            else:
+                weight.setValue(1.0)
+            # 선택 복원이 끝난 뒤에 연결한다 — 먼저 연결하면 복원이 콜백을 깨워
+            # 사용자가 조정한 가중치를 레지스트리 기본값으로 덮어쓴다.
+            combo.currentIndexChanged.connect(
+                lambda _i, cid=char.id: self._on_lora_selected(cid)
+            )
+            # 가중치만 바꿔도 결과가 달라진다 — 복원이 끝난 뒤 연결한다.
+            weight.valueChanged.connect(self._reemit_local)
+
+            self._lora_layout.addWidget(row_widget)
+            self._lora_combos[char.id] = combo
+            self._lora_weights[char.id] = weight
+        self._update_lora_visibility()
+
+    def _on_lora_selected(self, char_id: str) -> None:
+        """LoRA를 고르면 가중치를 레지스트리 기본값으로 맞추고 결과를 다시 뽑는다."""
+        entry_id = self._lora_combos[char_id].currentData()
+        entry = self._compiler.lora_registry.get(entry_id) if entry_id else None
+        weight = self._lora_weights[char_id]
+        # 가중치를 바꾸면 valueChanged가 _reemit_local을 또 부른다 — 한 번만 뽑는다.
+        weight.blockSignals(True)
+        weight.setValue(entry.weight if entry else 1.0)
+        weight.blockSignals(False)
+        self._reemit_local()
+
+    def _reemit_local(self) -> None:
+        """LoRA 선택이 바뀌면 로컬 결과 전체를 다시 뽑는다.
+
+        LLM을 다시 타지 않는다 — emitter는 이미 확정된 ``CompiledPrompt``만
+        읽는 순수 함수라 재조립으로 충분하다. 프롬프트 탭까지 갱신하지 않으면
+        COUPLE MASK 탭에는 LoRA가 보이는데 정작 적용되는 프롬프트에는 빠지는
+        엇갈림이 생긴다 (적용 버튼은 프롬프트 탭을 읽는다).
+        """
+        compiled = self._compiled
+        if compiled is None or compiled.target == NOVELAI_TARGET_ID:
+            return
+        preset = find_target(self._compiler.target_presets, compiled.target)
+        loras = self._character_loras()
+        if preset.flatten == "couple_mask":
+            base, negative = emit_couple_mask(
+                compiled, preset, loras, resolution=self._resolution()
+            )
+        else:
+            base, negative = emit_sequential(compiled, preset, loras)
+        # 사용자가 손댄 편집 내용을 덮어쓰지만, LoRA 변경 자체가 프롬프트를
+        # 바꾸겠다는 명시적 요청이므로 반영하는 쪽이 맞다.
+        self._compiled = replace(compiled, base_prompt=base, negative_prompt=negative)
+        self._final_edit.setPlainText(base)
+        self._negative_edit.setPlainText(negative)
+        self._render_local_outputs(self._compiled)
 
     # ------------------------------------------------------------------
     # Apply (MainWindow가 의미를 결정 — 여기선 신호만 쏜다)

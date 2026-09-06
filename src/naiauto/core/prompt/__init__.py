@@ -16,11 +16,20 @@ Qt 의존성 없음 — core 레이어에서 UI 없이 import 가능해야 한�
 from __future__ import annotations
 
 from naiauto.core.prompt.compiler import PromptCompiler, build_compiler
+from naiauto.core.prompt.emitters import emit_couple_mask, emit_regional_json, emit_sequential
 from naiauto.core.prompt.formatter import PromptFormatter
 from naiauto.core.prompt.merge import MergeResult, to_generation_data
 from naiauto.core.prompt.providers import API_KEY_CREDENTIAL
 from naiauto.core.prompt.resolver import TagResolver
 from naiauto.core.prompt.schema import CompiledPrompt
+from naiauto.core.prompt.targets import (
+    NOVELAI_TARGET_ID,
+    LoraEntry,
+    TargetPreset,
+    find_target,
+    load_lora_registry,
+    load_target_presets,
+)
 
 __all__ = [
     "PromptCompiler",
@@ -31,4 +40,13 @@ __all__ = [
     "TagResolver",
     "PromptFormatter",
     "API_KEY_CREDENTIAL",
+    "NOVELAI_TARGET_ID",
+    "TargetPreset",
+    "LoraEntry",
+    "load_target_presets",
+    "load_lora_registry",
+    "find_target",
+    "emit_sequential",
+    "emit_couple_mask",
+    "emit_regional_json",
 ]

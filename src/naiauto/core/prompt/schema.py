@@ -85,6 +85,8 @@ class CompiledPrompt:
     mode: str  # "tag" | "hybrid" | "natural"
     warnings: tuple[str, ...]
     unresolved: tuple[str, ...]
+    #: 출력 대상 프리셋 id. "novelai"(기본)면 기존 NovelAI 경로.
+    target: str = "novelai"
 
 
 MODE_TAGS = ("tag", "hybrid", "natural")

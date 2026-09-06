@@ -1,0 +1,16 @@
+{
+  "id": "animagine",
+  "name": "Animagine XL",
+  "quality_prefix": ["masterpiece", "high score", "great score", "absurdres"],
+  "quality_suffix": [],
+  "default_negative": [
+    "lowres", "bad anatomy", "bad hands", "text", "error", "missing finger",
+    "extra digits", "fewer digits", "cropped", "worst quality", "low quality",
+    "signature", "watermark"
+  ],
+  "weight_syntax": "a1111",
+  "flatten": "sequential",
+  "position_tags": true,
+  "natural_language": "drop",
+  "underscore_to_space": true
+}

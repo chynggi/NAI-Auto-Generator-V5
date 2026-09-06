@@ -23,6 +23,7 @@
 4. [주요 기능](#주요-기능)
    - [캐릭터 프롬프트](#캐릭터-프롬프트)
    - [캐릭터 프롬프트](#캐릭터-프롬프트)
+   - [자연어 프롬프트 컴파일러](#자연어-프롬프트-컴파일러)
    - [강화 업스케일 (Enhance)](#강화-업스케일-enhance)
    - [아티스트 조합](#아티스트-조합)
    - [세팅별 연속 생성](#세팅별-연속-생성)
@@ -360,6 +361,106 @@ V4가 저장한 `.txt` 설정 파일도 그대로 읽을 수 있습니다 (V4에
 판이 이미지를 가리므로 필요할 때만 켜는 쪽이 편합니다. 켜고 끈다고 이미지 크기는 달라지지
 않으며, 켬/끔 상태는 종료 시 저장됩니다. 판 안에서 마우스 휠로 스크롤하면 긴 프롬프트도 끝까지
 읽을 수 있습니다.
+
+---
+
+### 자연어 프롬프트 컴파일러
+
+도구 → `자연어 프롬프트 컴파일러`(`Ctrl+Shift+P`)에서 원하는 장면을 문장으로 설명하면
+Scene/Character/Relationship으로 분해하고, 내장 Danbooru 태그 DB로 검증해 존재하지 않는
+태그는 최종 프롬프트에서 뺍니다. 변환 결과는 미리 본 뒤 Apply/Insert/Replace로 기존
+편집기에 반영합니다.
+
+#### 로컬 SDXL/Anima로 뽑기
+
+변환 창 위쪽 **출력 대상**을 `Illustrious / NoobAI`, `Animagine XL`,
+`SDXL (generic)` 중에서 고르면 결과가 NovelAI 형식이 아니라 로컬 모델이 바로
+먹는 형태로 나온다.
+
+- 캐릭터별 프롬프트가 따로 나가지 않고 **본문 하나로 합쳐진다.** 로컬 SDXL에는
+  캐릭터를 분리하는 기능이 없기 때문이다. 적용해도 캐릭터 프롬프트 탭은
+  건드리지 않는다.
+- 품질 태그(`masterpiece, best quality` 등)와 기본 네거티브가 자동으로 붙는다.
+- 결과 오른쪽에 탭이 셋 생긴다.
+  - **프롬프트** — 붙여넣어 바로 쓰는 단일 Positive. 아래 칸이 Negative다.
+  - **COUPLE MASK** — 인물을 좌우로 나눠 그리는 ComfyUI용 문자열.
+  - **영역 JSON** — 좌표를 0~1로 정규화한 구조화 데이터.
+
+##### COUPLE MASK를 쓰려면
+
+ComfyUI 확장 [`asagi4/comfyui-prompt-control`](https://github.com/asagi4/comfyui-prompt-control)이
+필요하다. ComfyUI Manager에서 설치하거나 `custom_nodes` 폴더에 클론한 뒤,
+`PC: Schedule Prompt`(`PCLazyTextEncode`) 노드에 이 탭의 문자열을 그대로 넣는다.
+
+맨 앞의 `MASK_SIZE(가로, 세로)`는 지우지 말 것. 이 확장은 마스크 크기를
+512×512로 가정하므로, SDXL 해상도에서 이 줄이 없으면 인물 영역이 어긋난다.
+
+인물이 한 명뿐이면 `COUPLE` 줄은 나오지 않는다 — 영역을 나눌 이유가 없기 때문이다.
+
+##### A1111 / Forge에서 쓰려면
+
+**프롬프트** 탭 내용을 그대로 붙여넣으면 된다. 인물을 좌우로 나누고 싶다면
+[Regional Prompter](https://github.com/hako-mikan/sd-webui-regional-prompter)를
+설치하고, 이 앱이 뽑아 준 프롬프트를 다음처럼 손으로 나눈다.
+
+```
+masterpiece, best quality, 2girls, rain, night
+ADDCOL 은발 캐릭터 태그
+ADDCOL 흑발 캐릭터 태그
+```
+
+`ADDCOL`은 세로로 자른 열을 만든다. 이 앱이 `ADDCOL` 형식을 직접 뽑지 않는 것은
+Regional Prompter가 비율 분할만 지원해 임의 좌표를 표현할 수 없기 때문이다.
+
+##### 캐릭터마다 다른 LoRA 쓰기
+
+**옵션 → Prompt AI → 타깃 프리셋 폴더**를 지정하고, 그 폴더에 `loras.json`을
+만든다.
+
+```json
+{
+  "kafka": {
+    "file": "kafka_illustrious.safetensors",
+    "weight": 0.8,
+    "triggers": ["kafka", "purple hair"]
+  }
+}
+```
+
+- `file` — LoRA 파일 이름. 프롬프트에는 확장자를 뗀 이름이 들어간다.
+- `weight` — 기본 가중치. 변환 창에서 그때그때 바꿀 수 있다.
+- `triggers` — 그 캐릭터 자리에 끼워 넣을 트리거 단어.
+
+파일을 만들면 변환한 뒤 결과 아래에 캐릭터별 LoRA 드롭다운이 생긴다.
+`<lora:...>` 태그는 프롬프트 맨 앞에 한 번만 들어가고, 트리거 단어는 해당
+캐릭터 자리에 들어간다. 파일이 없으면 이 UI 자체가 나오지 않는다.
+
+##### 나만의 타깃 프리셋 만들기
+
+같은 폴더에 `<이름>.json`을 두면 목록에 추가된다. 내장 프리셋과 `id`가 같으면
+내 것이 이긴다.
+
+```json
+{
+  "id": "my_model",
+  "name": "내 모델",
+  "quality_prefix": ["masterpiece", "best quality"],
+  "default_negative": ["lowres", "worst quality"],
+  "flatten": "sequential",
+  "natural_language": "drop",
+  "underscore_to_space": true
+}
+```
+
+- `flatten` — `sequential`(단일 프롬프트) 또는 `couple_mask`. 어느 쪽이든 탭
+  셋은 다 나오고, 이 값은 **프롬프트** 탭에 무엇을 채울지만 정한다.
+- `natural_language` — `drop`(태그만) 또는 `append`(자연어 문장도 붙임).
+  애니 계열은 `drop`, 범용 SDXL은 `append`가 대체로 낫다.
+- `underscore_to_space` — `silver_hair`를 `silver hair`로 바꾼다. Illustrious
+  계열은 공백형을 학습해서 켜 두는 편이 맞다.
+- `id`를 `novelai`로 쓰면 무시된다 (예약어).
+
+깨진 JSON은 그 파일만 건너뛰고 나머지는 정상 동작한다.
 
 ---
 

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from naiauto.core.i18n.manager import default_languages_path
 from naiauto.ui.prompt_compiler_dialog import CompilerApplyPayload, PromptCompilerDialog
 
-#: Task 11이 4개 언어 파일에 추가해야 하는 compiler 섹션 키.
+#: 4개 언어 파일에 존재해야 하는 compiler 섹션 키.
 NEW_COMPILER_KEYS = (
     "err_connection",
     "err_timeout",
@@ -21,6 +21,19 @@ NEW_COMPILER_KEYS = (
     "result_relationship_row",
     "recent_inputs",
     "recent_placeholder",
+    # 출력 타깃 (로컬 SDXL)
+    "target",
+    "target_novelai",
+    "tab_prompt",
+    "tab_couple_mask",
+    "tab_regional_json",
+    "copy",
+    "copied",
+    "local_hint",
+    "couple_mask_hint",
+    "lora",
+    "lora_none",
+    "lora_weight",
 )
 
 
@@ -231,4 +244,342 @@ def test_history_combo_select_restores_modify_fields(qapp, tmp_path):
     assert dialog._tabs.currentWidget() is dialog._modify_tab
     assert dialog._existing_edit.toPlainText() == "1girl, cafe"
     assert dialog._instruction_edit.toPlainText() == "배경을 밤으로"
+    dialog.close()
+
+
+# --- 출력 타깃 -------------------------------------------------------------
+# 위 히스토리 테스트가 쓰는 _dialog(qapp, tmp_path)와 시그니처가 달라 이름을
+# 따로 둔다 — 같은 이름으로 덮으면 앞선 테스트들이 깨진다.
+
+
+def _target_dialog(tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    return PromptCompilerDialog(
+        I18nManager(),
+        AppSettings(),
+        history=PromptInputHistory(path=tmp_path / "history.json"),
+    )
+
+
+def _local_compiled(target="illustrious"):
+    from naiauto.core.prompt.schema import (
+        CharacterPrompt,
+        CompiledPrompt,
+        ScenePrompt,
+        TagRef,
+    )
+
+    return CompiledPrompt(
+        base_prompt="masterpiece, 2girls, rain",
+        negative_prompt="lowres",
+        scene=ScenePrompt(tags=(TagRef("rain"),), subjects=("girl", "girl")),
+        characters=(
+            CharacterPrompt(id="c1", tags=(TagRef("silver_hair"),), center_x=0.3, center_y=0.5),
+            CharacterPrompt(id="c2", tags=(TagRef("black_hair"),), center_x=0.7, center_y=0.5),
+        ),
+        relationships=(),
+        mode="hybrid",
+        warnings=(),
+        unresolved=(),
+        target=target,
+    )
+
+
+def test_target_combo_lists_novelai_and_builtin_presets(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    values = [dialog.target_combo.itemData(i) for i in range(dialog.target_combo.count())]
+    assert values[0] == "novelai"
+    assert "illustrious" in values
+    dialog.close()
+
+
+def test_target_combo_defaults_from_settings(qapp, tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    settings = AppSettings()
+    settings.compiler.default_target = "illustrious"
+    dialog = PromptCompilerDialog(
+        I18nManager(),
+        settings,
+        history=PromptInputHistory(path=tmp_path / "h.json"),
+    )
+    assert dialog.target_combo.currentData() == "illustrious"
+    dialog.close()
+
+
+def test_novelai_target_hides_local_tabs(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    assert dialog._result_tabs.count() == 1
+    dialog.close()
+
+
+def test_local_target_shows_three_result_tabs(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    assert dialog._result_tabs.count() == 3
+    dialog.close()
+
+
+def test_local_target_renders_couple_mask_and_json(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert "COUPLE MASK(0 0.5, 0 1)" in dialog._couple_edit.toPlainText()
+    data = json.loads(dialog._json_edit.toPlainText())
+    assert [r["id"] for r in data["regions"]] == ["c1", "c2"]
+    dialog.close()
+
+
+def test_novelai_target_leaves_local_editors_empty(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    assert dialog._couple_edit.toPlainText() == ""
+    assert dialog._json_edit.toPlainText() == ""
+    dialog.close()
+
+
+def test_switching_back_to_novelai_clears_stale_local_output(qapp, tmp_path):
+    """로컬 결과를 본 뒤 NovelAI로 돌아가면 낡은 COUPLE 문자열이 남으면 안 된다."""
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert dialog._couple_edit.toPlainText() != ""
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    assert dialog._couple_edit.toPlainText() == ""
+    assert dialog._json_edit.toPlainText() == ""
+    dialog.close()
+
+
+def test_local_target_apply_sends_no_characters(qapp, tmp_path):
+    received = []
+    dialog = _target_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._on_apply("apply")
+    assert received[0].characters == ()
+    assert received[0].prompt == "masterpiece, 2girls, rain"
+
+
+def test_novelai_target_apply_still_sends_characters(qapp, tmp_path):
+    received = []
+    dialog = _target_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    dialog._on_apply("apply")
+    assert len(received[0].characters) == 2
+    dialog.close()
+
+
+# --- 캐릭터별 LoRA ---------------------------------------------------------
+
+
+def _lora_dialog(tmp_path):
+    """loras.json이 있는 프리셋 폴더를 가리키는 다이얼로그."""
+    import json as _json
+
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    (presets_dir / "loras.json").write_text(
+        _json.dumps(
+            {"kafka": {"file": "kafka.safetensors", "weight": 0.8, "triggers": ["kafka"]}}
+        ),
+        encoding="utf-8",
+    )
+    settings = AppSettings()
+    settings.compiler.target_presets_dir = str(presets_dir)
+    settings.compiler.default_target = "illustrious"
+    return PromptCompilerDialog(
+        I18nManager(), settings, history=PromptInputHistory(path=tmp_path / "h.json")
+    )
+
+
+def test_lora_group_hidden_without_registry(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._render_preview(_local_compiled())
+    assert not dialog._lora_group.isVisibleTo(dialog)
+    dialog.close()
+
+
+def test_lora_rows_appear_per_character(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    assert set(dialog._lora_combos) == {"c1", "c2"}
+    assert dialog._lora_combos["c1"].itemData(0) is None  # "없음"
+    assert dialog._lora_combos["c1"].itemData(1) == "kafka"
+    dialog.close()
+
+
+def test_lora_group_hidden_on_novelai_target(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._render_preview(_local_compiled(target="novelai"))
+    assert not dialog._lora_group.isVisibleTo(dialog)
+    dialog.close()
+
+
+def test_lora_selection_survives_recompile(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._lora_weights["c1"].setValue(0.5)
+    dialog._render_preview(_local_compiled())  # 다시 변환한 셈
+    assert dialog._lora_combos["c1"].currentData() == "kafka"
+    assert dialog._lora_weights["c1"].value() == 0.5
+    dialog.close()
+
+
+def test_character_loras_snapshot_reflects_selection(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c2"].setCurrentIndex(1)
+    dialog._lora_weights["c2"].setValue(0.6)
+    loras = dialog._character_loras()
+    assert set(loras) == {"c2"}
+    assert loras["c2"].file == "kafka.safetensors"
+    assert loras["c2"].weight == 0.6
+    dialog.close()
+
+
+def test_selecting_lora_fills_registry_default_weight(qapp, tmp_path):
+    """LoRA를 고르면 가중치가 레지스트리 기본값(0.8)으로 맞춰진다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    assert dialog._lora_weights["c1"].value() == 0.8
+    dialog.close()
+
+
+def test_lora_appears_in_couple_mask_output(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._render_preview(_local_compiled())
+    assert "<lora:kafka:0.8>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_lora_rows_cleared_when_result_has_no_characters(qapp, tmp_path):
+    """캐릭터가 없는 배경 프롬프트에서는 행이 남지 않아야 한다."""
+    from naiauto.core.prompt.schema import CompiledPrompt, ScenePrompt, TagRef
+
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    assert dialog._lora_combos
+    background = CompiledPrompt(
+        base_prompt="alley, night",
+        negative_prompt="",
+        scene=ScenePrompt(tags=(TagRef("alley"),)),
+        characters=(),
+        relationships=(),
+        mode="hybrid",
+        warnings=(),
+        unresolved=(),
+        target="illustrious",
+    )
+    dialog._render_preview(background)
+    assert dialog._lora_combos == {}
+    dialog.close()
+
+
+def test_history_restore_sets_target(qapp, tmp_path):
+    from naiauto.core.prompt.history import InputHistoryEntry
+
+    dialog = _target_dialog(tmp_path)
+    dialog._history.add(
+        InputHistoryEntry(tab="create", text="은발 소녀", mode="tag", target="illustrious")
+    )
+    dialog._refresh_history_combo()
+    dialog._history_combo.setCurrentIndex(1)
+    assert dialog.target_combo.currentData() == "illustrious"
+    assert dialog.mode_combo.currentData() == "tag"
+    dialog.close()
+
+
+def test_history_restore_unknown_target_leaves_combo_alone(qapp, tmp_path):
+    """레지스트리에서 사라진 타깃이면 현재 선택을 건드리지 않는다."""
+    from naiauto.core.prompt.history import InputHistoryEntry
+
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._history.add(
+        InputHistoryEntry(tab="create", text="x", mode="hybrid", target="deleted-preset")
+    )
+    dialog._refresh_history_combo()
+    dialog._history_combo.setCurrentIndex(1)
+    assert dialog.target_combo.currentData() == "novelai"
+    dialog.close()
+
+
+# --- LoRA 선택과 결과 탭의 동기화 -------------------------------------------
+
+
+def test_selecting_lora_updates_prompt_tab_not_just_couple_tab(qapp, tmp_path):
+    """적용 버튼은 프롬프트 탭을 읽는다 — LoRA가 거기에도 반영돼야 한다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert "<lora:" not in dialog._final_edit.toPlainText()
+
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+
+    assert "<lora:kafka:0.8>" in dialog._final_edit.toPlainText()
+    assert "<lora:kafka:0.8>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_changing_lora_weight_updates_prompt_tab(qapp, tmp_path):
+    """가중치 스핀박스도 결과를 바꾼다 — 콤보만 연결하면 반쪽짜리다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    assert "<lora:kafka:0.8>" in dialog._final_edit.toPlainText()
+
+    dialog._lora_weights["c1"].setValue(0.5)
+
+    assert "<lora:kafka:0.5>" in dialog._final_edit.toPlainText()
+    assert "<lora:kafka:0.5>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_lora_change_keeps_apply_payload_in_sync(qapp, tmp_path):
+    """적용 시 나가는 프롬프트에 LoRA가 실제로 담긴다."""
+    received = []
+    dialog = _lora_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._on_apply("apply")
+    assert "<lora:kafka:0.8>" in received[0].prompt
+    assert received[0].characters == ()
+
+
+def test_lora_reemit_is_noop_on_novelai_target(qapp, tmp_path):
+    """NovelAI 결과는 emitter로 다시 뽑으면 안 된다 — 원본 그대로 남아야 한다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    before = dialog._final_edit.toPlainText()
+    dialog._reemit_local()
+    assert dialog._final_edit.toPlainText() == before
     dialog.close()

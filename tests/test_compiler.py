@@ -442,3 +442,161 @@ def test_korean_translation_failure_falls_back():
     )
     compiled = compiler.compile("비 오는 밤의 골목", mode="tag")
     assert compiled.base_prompt  # 번역 실패에도 파싱 정상
+
+
+# --- 출력 타깃 -------------------------------------------------------------
+
+
+def _target_compiler(monkeypatch, raw_json: dict):
+    """LLM을 타지 않는 컴파일러 — 파서만 스텁으로 갈아 끼운다."""
+    from naiauto.core.prompt.compiler import PromptCompiler
+    from naiauto.core.prompt.formatter import PromptFormatter
+    from naiauto.core.prompt.schema import LLMStructuredPrompt
+    from naiauto.core.prompt.targets import load_target_presets
+
+    class _StubProvider:
+        def chat(self, messages, **kwargs):  # pragma: no cover - 호출되지 않는다
+            raise AssertionError("provider should not be called")
+
+    class _StubResolver:
+        def resolve_phrase(self, phrase):  # 전부 verified로 통과
+            from naiauto.core.prompt.schema import TagRef
+
+            return [TagRef(tag=phrase, status="verified")]
+
+    compiler = PromptCompiler(
+        provider=_StubProvider(),
+        resolver=_StubResolver(),
+        formatter=PromptFormatter(),
+        # 프리셋은 주입한다 — 컴파일러 생성자는 디스크를 읽지 않는다.
+        target_presets=load_target_presets(None),
+    )
+    parsed = LLMStructuredPrompt.model_validate(raw_json)
+    monkeypatch.setattr(compiler._parser, "parse", lambda *a, **k: parsed)
+    return compiler
+
+
+_RAW = {
+    "scene": {"tags": ["rain", "night"], "subjects": ["girl", "girl"]},
+    "characters": [
+        {"id": "c1", "tags": ["silver_hair"], "position_hint": "left"},
+        {"id": "c2", "tags": ["black_hair"], "position_hint": "right"},
+    ],
+}
+
+
+def test_compile_default_target_is_novelai(monkeypatch):
+    compiled = _target_compiler(monkeypatch, _RAW).compile("x")
+    assert compiled.target == "novelai"
+    assert compiled.characters[0].prompt_text == "silver_hair"
+
+
+def test_compile_local_target_flattens_into_base_prompt(monkeypatch):
+    compiled = _target_compiler(monkeypatch, _RAW).compile("x", target="illustrious")
+    assert compiled.target == "illustrious"
+    assert "silver hair" in compiled.base_prompt
+    assert "black hair" in compiled.base_prompt
+    assert compiled.base_prompt.startswith("masterpiece")
+
+
+def test_compile_unknown_target_falls_back_to_novelai(monkeypatch):
+    compiled = _target_compiler(monkeypatch, _RAW).compile("x", target="no-such")
+    assert compiled.target == "novelai"
+
+
+def test_compile_couple_mask_flatten_uses_couple_emitter(monkeypatch):
+    from naiauto.core.prompt.targets import TargetPreset
+
+    compiler = _target_compiler(monkeypatch, _RAW)
+    compiler.target_presets = compiler.target_presets + (
+        TargetPreset(id="couple", name="Couple", flatten="couple_mask"),
+    )
+    compiled = compiler.compile("x", target="couple", resolution=(832, 1216))
+    assert compiled.base_prompt.startswith("MASK_SIZE(832, 1216) ")
+    assert "COUPLE MASK(0 0.5, 0 1)" in compiled.base_prompt
+
+
+def test_compile_character_loras_reach_the_prompt(monkeypatch):
+    from naiauto.core.prompt.targets import LoraEntry
+
+    entry = LoraEntry(id="k", file="k.safetensors", weight=0.8, triggers=("kafka",))
+    compiled = _target_compiler(monkeypatch, _RAW).compile(
+        "x", target="illustrious", character_loras={"c1": entry}
+    )
+    assert compiled.base_prompt.startswith("<lora:k:0.8>, masterpiece")
+    assert "kafka, silver hair" in compiled.base_prompt
+
+
+def test_compile_local_target_records_relationship_warning(monkeypatch):
+    raw = {
+        **_RAW,
+        "relationships": [
+            {"source": "c1", "target": "c2", "action": "chasing", "mutual": False}
+        ],
+    }
+    compiled = _target_compiler(monkeypatch, raw).compile("x", target="illustrious")
+    assert any("chasing" in w for w in compiled.warnings)
+
+
+def test_compile_novelai_target_has_no_emitter_warning(monkeypatch):
+    """NovelAI 경로는 관계를 문장으로 표현하므로 emitter 경고가 붙으면 안 된다."""
+    raw = {
+        **_RAW,
+        "relationships": [
+            {"source": "c1", "target": "c2", "action": "chasing", "mutual": False}
+        ],
+    }
+    compiled = _target_compiler(monkeypatch, raw).compile("x")
+    assert not any("no equivalent tag" in w for w in compiled.warnings)
+
+
+def test_modify_preserves_tokens_on_local_target(monkeypatch):
+    raw = {
+        "scene": {"tags": ["rain"], "subjects": ["girl"]},
+        "characters": [{"id": "c1", "tags": ["silver_hair"]}],
+    }
+    compiled = _target_compiler(monkeypatch, raw).modify(
+        "1girl, __dynamic__, {artist:grp}", "비를 추가해줘", target="illustrious"
+    )
+    assert "__dynamic__" in compiled.base_prompt
+    assert "{artist:grp}" in compiled.base_prompt
+
+
+def test_modify_preserves_tokens_on_couple_mask_target(monkeypatch):
+    """보존 토큰은 전역 라인에 붙어야 한다 — COUPLE 라인에 들어가면 그 캐릭터에만 적용된다."""
+    from naiauto.core.prompt.targets import TargetPreset
+
+    raw = {
+        "scene": {"tags": ["rain"], "subjects": ["girl", "girl"]},
+        "characters": [
+            {"id": "c1", "tags": ["silver_hair"], "position_hint": "left"},
+            {"id": "c2", "tags": ["black_hair"], "position_hint": "right"},
+        ],
+    }
+    compiler = _target_compiler(monkeypatch, raw)
+    compiler.target_presets = compiler.target_presets + (
+        TargetPreset(id="couple", name="Couple", flatten="couple_mask"),
+    )
+    compiled = compiler.modify(
+        "2girls, __dynamic__", "비를 추가해줘", target="couple", resolution=(832, 1216)
+    )
+    lines = compiled.base_prompt.splitlines()
+    assert "__dynamic__" in lines[0]
+    assert not any("__dynamic__" in line for line in lines[1:])
+
+
+def test_modify_novelai_splice_point_unchanged(monkeypatch):
+    """NovelAI hybrid 출력(태그 라인 + \\n\\n + 자연어)의 스플라이스 위치는 그대로다."""
+    raw = {
+        "scene": {
+            "tags": ["rain"],
+            "subjects": ["girl"],
+            "natural_language": "A quiet rainy night.",
+        },
+        "characters": [{"id": "c1", "tags": ["silver_hair"]}],
+    }
+    compiled = _target_compiler(monkeypatch, raw).modify(
+        "1girl, __dynamic__", "비를 추가해줘"
+    )
+    head = compiled.base_prompt.split("\n\n", 1)[0]
+    assert "__dynamic__" in head

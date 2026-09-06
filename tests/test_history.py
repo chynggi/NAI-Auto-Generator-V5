@@ -80,3 +80,59 @@ def test_missing_file_loads_empty(tmp_path):
     hist = PromptInputHistory(path=tmp_path / "missing.json")
     hist.load()
     assert hist.recent() == []
+
+
+def test_entry_stores_target(tmp_path):
+    from naiauto.core.prompt.history import InputHistoryEntry, PromptInputHistory
+
+    history = PromptInputHistory(path=tmp_path / "h.json")
+    history.add(InputHistoryEntry(tab="create", text="x", mode="hybrid", target="illustrious"))
+    reloaded = PromptInputHistory(path=tmp_path / "h.json")
+    reloaded.load()
+    assert reloaded.recent()[0].target == "illustrious"
+
+
+def test_entry_target_defaults_to_novelai():
+    from naiauto.core.prompt.history import InputHistoryEntry
+
+    assert InputHistoryEntry(tab="create", text="x").target == "novelai"
+
+
+def test_old_history_file_without_target_loads(tmp_path):
+    """타깃 필드가 없던 시절의 히스토리 파일도 그대로 열려야 한다."""
+    import json
+
+    from naiauto.core.prompt.history import PromptInputHistory
+
+    path = tmp_path / "h.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [{"tab": "create", "text": "x", "mode": "hybrid", "ts": 1.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    history = PromptInputHistory(path=path)
+    history.load()
+    assert history.recent()[0].target == "novelai"
+
+
+def test_same_text_different_target_are_separate_entries(tmp_path):
+    """타깃이 다르면 같은 문장이라도 별개 입력이다 — 결과가 다르기 때문."""
+    from naiauto.core.prompt.history import InputHistoryEntry, PromptInputHistory
+
+    history = PromptInputHistory(path=tmp_path / "h.json")
+    history.add(InputHistoryEntry(tab="create", text="x", target="novelai"))
+    history.add(InputHistoryEntry(tab="create", text="x", target="illustrious"))
+    assert len(history.recent()) == 2
+
+
+def test_same_text_same_target_deduplicates(tmp_path):
+    from naiauto.core.prompt.history import InputHistoryEntry, PromptInputHistory
+
+    history = PromptInputHistory(path=tmp_path / "h.json")
+    history.add(InputHistoryEntry(tab="create", text="x", target="illustrious"))
+    history.add(InputHistoryEntry(tab="create", text="x", target="illustrious"))
+    assert len(history.recent()) == 1

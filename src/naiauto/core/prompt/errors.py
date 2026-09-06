@@ -52,6 +52,10 @@ class CompilerProviderUnavailableError(CompilerError):
     """provider 설정 누락 등."""
 
 
+class TargetPresetError(CompilerError):
+    """타깃 프리셋 JSON 파싱/스키마 검증 실패."""
+
+
 __all__ = [
     "CompilerError",
     "CompilerConnectionError",
@@ -61,4 +65,5 @@ __all__ = [
     "CompilerParseError",
     "CompilerEmptyResultError",
     "CompilerProviderUnavailableError",
+    "TargetPresetError",
 ]

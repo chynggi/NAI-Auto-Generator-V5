@@ -26,7 +26,7 @@ GOOD_JSON = """{
 
 def test_load_system_prompt():
     text = load_system_prompt()
-    assert "NovelAI V5 prompt analysis assistant" in text
+    assert "image prompt analysis assistant" in text
     assert "talking_to" in text
 
 
@@ -63,7 +63,7 @@ def test_parse_structured_invalid_schema_raises():
 def test_build_messages_create_mode():
     msgs = build_messages("a girl in a cafe")
     assert msgs[0]["role"] == "system"
-    assert "NovelAI" in msgs[0]["content"]
+    assert "image prompt analysis" in msgs[0]["content"]
     assert msgs[1] == {"role": "user", "content": "a girl in a cafe"}
 
 

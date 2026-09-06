@@ -1,0 +1,15 @@
+{
+  "id": "illustrious",
+  "name": "Illustrious / NoobAI",
+  "quality_prefix": ["masterpiece", "best quality", "very awa", "absurdres"],
+  "quality_suffix": [],
+  "default_negative": [
+    "lowres", "bad anatomy", "bad hands", "worst quality", "low quality",
+    "jpeg artifacts", "signature", "watermark", "username", "blurry"
+  ],
+  "weight_syntax": "a1111",
+  "flatten": "sequential",
+  "position_tags": true,
+  "natural_language": "drop",
+  "underscore_to_space": true
+}

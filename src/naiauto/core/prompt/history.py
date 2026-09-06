@@ -49,12 +49,13 @@ class InputHistoryEntry:
     existing_prompt: str = ""   # modify 탭 기존 프롬프트 (create면 빈 문자열)
     instruction: str = ""       # modify 탭 지시문 (create면 빈 문자열)
     mode: str = "hybrid"        # tag | hybrid | natural
+    target: str = "novelai"     # 출력 대상 프리셋 id
     ts: float = 0.0             # epoch 초 (표시/정렬 용도)
 
 
 class PromptInputHistory:
     """최근 입력 히스토리 — 최신순 목록, 디스크 영속."""
-    _FIELDS = ("tab", "text", "existing_prompt", "instruction", "mode")
+    _FIELDS = ("tab", "text", "existing_prompt", "instruction", "mode", "target")
 
     def __init__(self, path: Path, max_entries: int = 20) -> None:
         self._path = path
@@ -100,6 +101,7 @@ class PromptInputHistory:
                         existing_prompt=str(item.get("existing_prompt", "")),
                         instruction=str(item.get("instruction", "")),
                         mode=str(item.get("mode", "hybrid")),
+                        target=str(item.get("target", "novelai")),
                         ts=float(item.get("ts", 0.0)),
                     )
                 )

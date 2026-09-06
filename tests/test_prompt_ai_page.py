@@ -59,3 +59,95 @@ def test_commit_no_key_leaves_state_unchanged(qapp, monkeypatch):
     assert called == []
     assert draft.prompt_ai.api_key_available is False
     assert page.notices() == ()
+
+
+# --- 출력 타깃 -------------------------------------------------------------
+
+
+def test_target_combo_lists_novelai_and_presets(qapp):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    page = PromptAiPage(I18nManager())
+    values = [page.target_combo.itemData(i) for i in range(page.target_combo.count())]
+    assert values[0] == "novelai"
+    assert "illustrious" in values
+
+
+def test_target_round_trips_through_load_and_commit(qapp, tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    page = PromptAiPage(I18nManager())
+    draft = AppSettings()
+    draft.compiler.default_target = "illustrious"
+    draft.compiler.target_presets_dir = str(tmp_path)
+    page.load(draft)
+    assert page.target_combo.currentData() == "illustrious"
+    assert page.presets_dir_edit.text() == str(tmp_path)
+
+    out = AppSettings()
+    page.commit(out)
+    assert out.compiler.default_target == "illustrious"
+    assert out.compiler.target_presets_dir == str(tmp_path)
+
+
+def test_unknown_default_target_falls_back_in_ui(qapp):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    page = PromptAiPage(I18nManager())
+    draft = AppSettings()
+    draft.compiler.default_target = "no-such-target"
+    page.load(draft)
+    assert page.target_combo.currentData() == "novelai"
+
+
+def test_user_preset_dir_extends_target_combo(qapp, tmp_path):
+    """폴더를 지정하면 사용자 프리셋이 콤보에 추가된다."""
+    import json
+
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    (tmp_path / "mine.json").write_text(
+        json.dumps({"id": "mine", "name": "My Model"}), encoding="utf-8"
+    )
+    page = PromptAiPage(I18nManager())
+    draft = AppSettings()
+    draft.compiler.target_presets_dir = str(tmp_path)
+    page.load(draft)
+    values = [page.target_combo.itemData(i) for i in range(page.target_combo.count())]
+    assert "mine" in values
+
+
+def test_lora_status_reports_registry_size(qapp, tmp_path):
+    import json
+
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    (tmp_path / "loras.json").write_text(
+        json.dumps({"kafka": {"file": "kafka.safetensors"}}), encoding="utf-8"
+    )
+    page = PromptAiPage(I18nManager())
+    draft = AppSettings()
+    draft.compiler.target_presets_dir = str(tmp_path)
+    page.load(draft)
+    assert "1" in page.lora_status_label.text()
+
+
+def test_lora_status_when_registry_missing(qapp, tmp_path):
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.settings.schema import AppSettings
+    from naiauto.ui.options_pages.prompt_ai_page import PromptAiPage
+
+    page = PromptAiPage(I18nManager())
+    draft = AppSettings()
+    draft.compiler.target_presets_dir = str(tmp_path)
+    page.load(draft)
+    assert page.lora_status_label.text() != ""
