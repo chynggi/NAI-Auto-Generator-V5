@@ -104,7 +104,10 @@
       "section_collapsed": "접힘",
       "options_menu": "옵션...",
       "manual_position": "수동 위치 지정",
-      "toggle_slot": "슬롯 접기 / 펼치기"
+      "toggle_slot": "슬롯 접기 / 펼치기",
+      "backend": "백엔드",
+      "backend_novelai": "NovelAI",
+      "backend_comfyui": "ComfyUI (로컬)"
     },
     "image_options": {
       "title": "이미지 옵션",
@@ -303,7 +306,13 @@
       "fixed_seed_batch": "연속 생성에는 랜덤 시드가 필요합니다. 시드 '랜덤'을 켜거나 생성 매수를 1로 맞춰 주세요.",
       "wd14_model_missing": "WD14 모델을 찾지 못했습니다 ({} 없음).\n\n{}\n\n옵션 → 태그에서 모델 폴더를 지정하고 '모델 다운로드'를 누르세요.",
       "wd14_runtime_missing": "WD14 자동 태깅을 쓸 수 없습니다.\n\nonnxruntime을 불러오지 못했습니다:\n{}\n\n소스로 실행 중이면 `pip install -e .`(또는 `pip install onnxruntime numpy`)로 설치하세요.\n배포본(exe)이라면 v0.6.7 이상을 받으면 함께 들어 있습니다.",
-      "duplicate_generation": "직전 생성과 프롬프트·시드·해상도가 완전히 같습니다. 시드를 바꾸거나 시드 “랜덤”을 켠 뒤 다시 생성해 주세요."
+      "duplicate_generation": "직전 생성과 프롬프트·시드·해상도가 완전히 같습니다. 시드를 바꾸거나 시드 “랜덤”을 켠 뒤 다시 생성해 주세요.",
+      "comfy_connection": "ComfyUI에 연결할 수 없습니다 ({0}). 서버가 실행 중인지 확인하세요.",
+      "comfy_rejected": "ComfyUI가 요청을 거부했습니다: {0}",
+      "comfy_execution": "ComfyUI 실행 오류 ({0}): {1}",
+      "comfy_timeout": "ComfyUI 응답 시간이 초과되었습니다.",
+      "comfy_no_template": "워크플로를 먼저 선택하세요 (옵션 → 로컬 생성).",
+      "comfy_coupling_unsupported": "선택한 워크플로는 COUPLE MASK 좌표 문법을 지원하지 않습니다. sdxl_regional을 고르거나 좌표 없는 출력을 쓰세요."
     },
     "connection": {
       "server": "서버:",
@@ -532,7 +541,18 @@
       "llm_connect_ok": "{} 에 LM Studio 서버가 연결되었습니다.",
       "llm_connect_failed": "{} 에 연결하지 못했습니다. LM Studio 앱을 켜고 서버를 시작했는지, 주소가 맞는지 확인하세요.",
       "llm_models_found": "로드된 모델 {}개를 찾았습니다.",
-      "llm_no_models": "로드된 모델이 없습니다. LM Studio에서 모델을 먼저 로드하세요."
+      "llm_no_models": "로드된 모델이 없습니다. LM Studio에서 모델을 먼저 로드하세요.",
+      "local_backend_section": "ComfyUI 연결",
+      "local_backend_url": "서버 주소",
+      "local_backend_test": "연결 확인",
+      "local_backend_ok": "연결됨 — 노드 {0}종",
+      "local_backend_failed": "연결할 수 없습니다: {0}",
+      "local_backend_workflow": "워크플로",
+      "local_backend_workflow_dir": "사용자 워크플로 폴더",
+      "local_backend_models_section": "모델",
+      "local_backend_model_none": "(없음)",
+      "local_backend_no_options": "연결 확인을 먼저 눌러 주세요",
+      "local_backend_timeout": "타임아웃 (초)"
     },
     "resolution": {
       "title": "해상도",
@@ -565,7 +585,9 @@
       "llm": "프롬프트 생성 (LLM)",
       "llm_desc": "자연어 프롬프트 생성용 LM Studio 로컬 LLM 연결을 설정합니다.",
       "log": "로그 설정",
-      "log_desc": "디버그 모드 및 로그 설정을 관리합니다."
+      "log_desc": "디버그 모드 및 로그 설정을 관리합니다.",
+      "local_backend": "로컬 생성",
+      "local_backend_desc": "로컬 ComfyUI 서버 주소와 워크플로·모델을 설정합니다."
     },
     "gallery": {
       "title": "프롬프트 매니저",

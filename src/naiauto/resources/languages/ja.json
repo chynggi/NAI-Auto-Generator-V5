@@ -104,7 +104,10 @@
       "section_collapsed": "折りたたみ",
       "options_menu": "オプション...",
       "manual_position": "手動位置指定",
-      "toggle_slot": "スロットを折りたたむ / 展開"
+      "toggle_slot": "スロットを折りたたむ / 展開",
+      "backend": "バックエンド",
+      "backend_novelai": "NovelAI",
+      "backend_comfyui": "ComfyUI (ローカル)"
     },
     "image_options": {
       "title": "画像オプション",
@@ -303,7 +306,13 @@
       "fixed_seed_batch": "連続生成にはランダムシードが必要です。シードの「ランダム」を有効にするか、生成枚数を1にしてください。",
       "wd14_model_missing": "WD14 モデルが見つかりません({} がありません)。\n\n{}\n\nオプション → タグでモデルフォルダを指定し、「モデルをダウンロード」を押してください。",
       "wd14_runtime_missing": "WD14 自動タグ付けを利用できません。\n\nonnxruntime を読み込めませんでした:\n{}\n\nソースから実行している場合は `pip install -e .`（または `pip install onnxruntime numpy`）を実行してください。\n配布版（exe）なら v0.6.7 以降に同梱されています。",
-      "duplicate_generation": "直前の生成とプロンプト・シード・解像度が完全に同じです。シードを変えるか、シードの「ランダム」をオンにしてから生成してください。"
+      "duplicate_generation": "直前の生成とプロンプト・シード・解像度が完全に同じです。シードを変えるか、シードの「ランダム」をオンにしてから生成してください。",
+      "comfy_connection": "ComfyUI に接続できません ({0})。サーバーが起動しているか確認してください。",
+      "comfy_rejected": "ComfyUI がリクエストを拒否しました: {0}",
+      "comfy_execution": "ComfyUI 実行エラー ({0}): {1}",
+      "comfy_timeout": "ComfyUI の応答がタイムアウトしました。",
+      "comfy_no_template": "先にワークフローを選択してください (オプション → ローカル生成)。",
+      "comfy_coupling_unsupported": "選択したワークフローは COUPLE MASK の座標構文に対応していません。sdxl_regional を選ぶか、座標なしの出力を使ってください。"
     },
     "connection": {
       "server": "サーバー:",
@@ -532,7 +541,18 @@
       "llm_connect_ok": "{} の LM Studio サーバーに接続しました。",
       "llm_connect_failed": "{} に接続できませんでした。LM Studio アプリを起動しサーバーを開始しているか、アドレスが正しいか確認してください。",
       "llm_models_found": "ロード済みモデルを {} 個見つけました。",
-      "llm_no_models": "ロード済みのモデルがありません。まず LM Studio でモデルをロードしてください。"
+      "llm_no_models": "ロード済みのモデルがありません。まず LM Studio でモデルをロードしてください。",
+      "local_backend_section": "ComfyUI 接続",
+      "local_backend_url": "サーバーアドレス",
+      "local_backend_test": "接続確認",
+      "local_backend_ok": "接続完了 — ノード {0} 種",
+      "local_backend_failed": "接続できません: {0}",
+      "local_backend_workflow": "ワークフロー",
+      "local_backend_workflow_dir": "ユーザーワークフローフォルダー",
+      "local_backend_models_section": "モデル",
+      "local_backend_model_none": "(なし)",
+      "local_backend_no_options": "先に接続確認を実行してください",
+      "local_backend_timeout": "タイムアウト (秒)"
     },
     "resolution": {
       "title": "解像度",
@@ -565,7 +585,9 @@
       "llm": "プロンプト生成 (LLM)",
       "llm_desc": "自然言語プロンプト生成に使う LM Studio のローカル LLM 接続を設定します。",
       "log": "ログ設定",
-      "log_desc": "デバッグモードとログ設定を管理します。"
+      "log_desc": "デバッグモードとログ設定を管理します。",
+      "local_backend": "ローカル生成",
+      "local_backend_desc": "ローカル ComfyUI サーバーのアドレス・ワークフロー・モデルを設定します。"
     },
     "gallery": {
       "title": "プロンプトマネージャー",

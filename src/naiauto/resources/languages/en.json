@@ -104,7 +104,10 @@
       "section_collapsed": "collapsed",
       "options_menu": "Options...",
       "manual_position": "Manual Position",
-      "toggle_slot": "Collapse / expand slot"
+      "toggle_slot": "Collapse / expand slot",
+      "backend": "Backend",
+      "backend_novelai": "NovelAI",
+      "backend_comfyui": "ComfyUI (Local)"
     },
     "image_options": {
       "title": "Image Options",
@@ -303,7 +306,13 @@
       "fixed_seed_batch": "Auto generation requires a random seed. Enable the seed 'Random' option or set the count to 1.",
       "wd14_model_missing": "WD14 model not found (no {}).\n\n{}\n\nSet the model folder under Options → Tags and press \"Download model\".",
       "wd14_runtime_missing": "WD14 auto-tagging is unavailable.\n\nonnxruntime could not be imported:\n{}\n\nRunning from source? Install it with `pip install -e .` (or `pip install onnxruntime numpy`).\nUsing the packaged build? v0.6.7 and newer ship it.",
-      "duplicate_generation": "Prompt, seed and resolution are identical to the previous generation. Change the seed or turn on \"Random\" and try again."
+      "duplicate_generation": "Prompt, seed and resolution are identical to the previous generation. Change the seed or turn on \"Random\" and try again.",
+      "comfy_connection": "Cannot connect to ComfyUI ({0}). Make sure the server is running.",
+      "comfy_rejected": "ComfyUI rejected the request: {0}",
+      "comfy_execution": "ComfyUI execution error ({0}): {1}",
+      "comfy_timeout": "ComfyUI did not respond in time.",
+      "comfy_no_template": "Select a workflow first (Options → Local Generation).",
+      "comfy_coupling_unsupported": "The selected workflow does not support COUPLE MASK coordinate syntax. Use sdxl_regional or an output without coordinates."
     },
     "connection": {
       "server": "Server:",
@@ -523,7 +532,18 @@
       "llm_connect_ok": "Connected to the LM Studio server at {}.",
       "llm_connect_failed": "Could not connect to {}. Make sure the LM Studio app is open with its server started, and the address is correct.",
       "llm_models_found": "Found {} loaded model(s).",
-      "llm_no_models": "No models are loaded. Load a model in LM Studio first."
+      "llm_no_models": "No models are loaded. Load a model in LM Studio first.",
+      "local_backend_section": "ComfyUI Connection",
+      "local_backend_url": "Server Address",
+      "local_backend_test": "Test Connection",
+      "local_backend_ok": "Connected — {0} nodes",
+      "local_backend_failed": "Cannot connect: {0}",
+      "local_backend_workflow": "Workflow",
+      "local_backend_workflow_dir": "User Workflow Folder",
+      "local_backend_models_section": "Models",
+      "local_backend_model_none": "(None)",
+      "local_backend_no_options": "Run the connection test first",
+      "local_backend_timeout": "Timeout (seconds)"
     },
     "resolution": {
       "title": "Resolution",
@@ -565,7 +585,9 @@
       "llm": "Prompt Generation (LLM)",
       "llm_desc": "Configure the LM Studio local LLM used for natural-language prompt generation.",
       "log": "Logging",
-      "log_desc": "Manage debug mode and logging settings."
+      "log_desc": "Manage debug mode and logging settings.",
+      "local_backend": "Local Generation",
+      "local_backend_desc": "Configure the local ComfyUI server address, workflow and models."
     },
     "gallery": {
       "title": "Prompt Manager",
