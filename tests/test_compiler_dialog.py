@@ -497,3 +497,32 @@ def test_lora_rows_cleared_when_result_has_no_characters(qapp, tmp_path):
     dialog._render_preview(background)
     assert dialog._lora_combos == {}
     dialog.close()
+
+
+def test_history_restore_sets_target(qapp, tmp_path):
+    from naiauto.core.prompt.history import InputHistoryEntry
+
+    dialog = _target_dialog(tmp_path)
+    dialog._history.add(
+        InputHistoryEntry(tab="create", text="은발 소녀", mode="tag", target="illustrious")
+    )
+    dialog._refresh_history_combo()
+    dialog._history_combo.setCurrentIndex(1)
+    assert dialog.target_combo.currentData() == "illustrious"
+    assert dialog.mode_combo.currentData() == "tag"
+    dialog.close()
+
+
+def test_history_restore_unknown_target_leaves_combo_alone(qapp, tmp_path):
+    """레지스트리에서 사라진 타깃이면 현재 선택을 건드리지 않는다."""
+    from naiauto.core.prompt.history import InputHistoryEntry
+
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._history.add(
+        InputHistoryEntry(tab="create", text="x", mode="hybrid", target="deleted-preset")
+    )
+    dialog._refresh_history_combo()
+    dialog._history_combo.setCurrentIndex(1)
+    assert dialog.target_combo.currentData() == "novelai"
+    dialog.close()

@@ -582,6 +582,7 @@ class PromptCompilerDialog(QDialog):
             existing_prompt=inputs.existing,
             instruction=inputs.instruction,
             mode=inputs.mode,
+            target=inputs.target,
             ts=time.time(),
         )
 
@@ -619,6 +620,9 @@ class PromptCompilerDialog(QDialog):
         index = self.mode_combo.findData(entry.mode)
         if index >= 0:
             self.mode_combo.setCurrentIndex(index)
+        target_index = self.target_combo.findData(entry.target)
+        if target_index >= 0:
+            self.target_combo.setCurrentIndex(target_index)
 
     def _set_conversion_idle(self) -> None:
         """변환 종료(성공/실패/취소) 후 컨트롤을 복구한다."""
