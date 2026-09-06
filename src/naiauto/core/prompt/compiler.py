@@ -40,6 +40,7 @@ from naiauto.core.prompt.schema import (
     TagRef,
 )
 from naiauto.core.prompt.targets import (
+    NOVELAI_PRESET,
     LoraEntry,
     TargetPreset,
     find_target,
@@ -70,7 +71,7 @@ class PromptCompiler:
         use_resolver: bool = True,
         retriever: TagRetriever | None = None,
         server_manager=None,
-        target_presets: tuple[TargetPreset, ...] | None = None,
+        target_presets: tuple[TargetPreset, ...] = (NOVELAI_PRESET,),
         lora_registry: Mapping[str, LoraEntry] | None = None,
     ) -> None:
         self._parser = SceneParser(provider, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
@@ -83,12 +84,9 @@ class PromptCompiler:
         #: 자동 기동된 llama-server 프로세스 관리자 (close()에서 종료).
         self._server_manager = server_manager
         #: 사용 가능한 출력 타깃 프리셋 (UI가 콤보를 채울 때도 읽는다).
-        #: None이면 novelai + 내장 프리셋(resources/prompt_targets)을 읽는다 —
-        #: build_compiler를 거치지 않고 직접 만든 컴파일러도 로컬 타깃을 쓸 수 있어야 한다.
-        #: 기본값 자리에서 부르지 않는 건 import 시점 I/O를 피하기 위해서다.
-        self.target_presets = (
-            load_target_presets(None) if target_presets is None else target_presets
-        )
+        #: 프리셋 로딩(디스크 I/O)은 build_compiler의 몫이다 — 컴파일러 자신은
+        #: 주입만 받아야 파일시스템 없이도 테스트할 수 있다.
+        self.target_presets = target_presets
         #: 사용자 LoRA 레지스트리 (id → LoraEntry). UI가 드롭다운을 채울 때 읽는다.
         self.lora_registry = dict(lora_registry or {})
 
@@ -149,16 +147,23 @@ class PromptCompiler:
             translated_text=translations.get(instruction, ""),
         )
         result = self._assemble(raw, mode, target, character_loras or {}, resolution)
+        # 스플라이스 위치는 출력 모양에 따라 다르다. couple_mask는 "\n"으로 이어붙인
+        # [전역 라인, COUPLE 라인…]이라 "\n\n"으로 자르면 전체가 한 덩어리로 잡히고,
+        # 보존 토큰이 마지막 COUPLE 라인 = 특정 캐릭터 영역에 들어가 버린다.
+        # 그 외(NovelAI 태그 라인 + "\n\n" + 자연어 문단)는 기존 동작 그대로.
+        preset = find_target(self.target_presets, target)
+        separator = "\n" if preset.kind != "novelai" and preset.flatten == "couple_mask" else "\n\n"
         # [Minor #5] 보존 토큰 확인은 부분 문자열이 아니라 태그 목록 세그먼트 단위로 —
         # "1girl"이 "1girls"의 부분 문자열로 오인되는 일이 없도록 한다.
-        tag_part = result.base_prompt.split("\n\n", 1)[0]
+        tag_part = result.base_prompt.split(separator, 1)[0]
         missing = [
             token for token in preserved if not re.search(rf"(^|,)\s*{re.escape(token)}\s*(,|$)", tag_part)
         ]
         if missing:
             suffix = ", ".join(missing)
-            # [review #2] "\n\n" 뒤는 NL 문단 — 보존 토큰은 태그 라인(head)에 스플라이스한다.
-            head, sep, tail = result.base_prompt.partition("\n\n")
+            # [review #2] 구분자 뒤는 NL 문단(또는 COUPLE 라인) — 보존 토큰은
+            # 태그 라인/전역 라인(head)에 스플라이스한다.
+            head, sep, tail = result.base_prompt.partition(separator)
             head = f"{head}, {suffix}" if head else suffix
             result = replace(result, base_prompt=f"{head}{sep}{tail}")
         return result

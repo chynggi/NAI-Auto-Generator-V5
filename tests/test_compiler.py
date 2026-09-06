@@ -452,6 +452,7 @@ def _target_compiler(monkeypatch, raw_json: dict):
     from naiauto.core.prompt.compiler import PromptCompiler
     from naiauto.core.prompt.formatter import PromptFormatter
     from naiauto.core.prompt.schema import LLMStructuredPrompt
+    from naiauto.core.prompt.targets import load_target_presets
 
     class _StubProvider:
         def chat(self, messages, **kwargs):  # pragma: no cover - 호출되지 않는다
@@ -467,6 +468,8 @@ def _target_compiler(monkeypatch, raw_json: dict):
         provider=_StubProvider(),
         resolver=_StubResolver(),
         formatter=PromptFormatter(),
+        # 프리셋은 주입한다 — 컴파일러 생성자는 디스크를 읽지 않는다.
+        target_presets=load_target_presets(None),
     )
     parsed = LLMStructuredPrompt.model_validate(raw_json)
     monkeypatch.setattr(compiler._parser, "parse", lambda *a, **k: parsed)
@@ -557,3 +560,43 @@ def test_modify_preserves_tokens_on_local_target(monkeypatch):
     )
     assert "__dynamic__" in compiled.base_prompt
     assert "{artist:grp}" in compiled.base_prompt
+
+
+def test_modify_preserves_tokens_on_couple_mask_target(monkeypatch):
+    """보존 토큰은 전역 라인에 붙어야 한다 — COUPLE 라인에 들어가면 그 캐릭터에만 적용된다."""
+    from naiauto.core.prompt.targets import TargetPreset
+
+    raw = {
+        "scene": {"tags": ["rain"], "subjects": ["girl", "girl"]},
+        "characters": [
+            {"id": "c1", "tags": ["silver_hair"], "position_hint": "left"},
+            {"id": "c2", "tags": ["black_hair"], "position_hint": "right"},
+        ],
+    }
+    compiler = _target_compiler(monkeypatch, raw)
+    compiler.target_presets = compiler.target_presets + (
+        TargetPreset(id="couple", name="Couple", flatten="couple_mask"),
+    )
+    compiled = compiler.modify(
+        "2girls, __dynamic__", "비를 추가해줘", target="couple", resolution=(832, 1216)
+    )
+    lines = compiled.base_prompt.splitlines()
+    assert "__dynamic__" in lines[0]
+    assert not any("__dynamic__" in line for line in lines[1:])
+
+
+def test_modify_novelai_splice_point_unchanged(monkeypatch):
+    """NovelAI hybrid 출력(태그 라인 + \\n\\n + 자연어)의 스플라이스 위치는 그대로다."""
+    raw = {
+        "scene": {
+            "tags": ["rain"],
+            "subjects": ["girl"],
+            "natural_language": "A quiet rainy night.",
+        },
+        "characters": [{"id": "c1", "tags": ["silver_hair"]}],
+    }
+    compiled = _target_compiler(monkeypatch, raw).modify(
+        "1girl, __dynamic__", "비를 추가해줘"
+    )
+    head = compiled.base_prompt.split("\n\n", 1)[0]
+    assert "__dynamic__" in head
