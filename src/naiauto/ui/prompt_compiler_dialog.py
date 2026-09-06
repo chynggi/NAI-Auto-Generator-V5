@@ -12,7 +12,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 import shiboken6
@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -135,6 +137,9 @@ class PromptCompilerDialog(QDialog):
         self._history = history if history is not None else PromptInputHistory(path=default_history_path())
         self._history.load()
         self._history_restoring = False
+        #: 캐릭터 id → LoRA 선택 콤보 / 가중치 스핀박스 (로컬 타깃에서만 만든다).
+        self._lora_combos: dict[str, QComboBox] = {}
+        self._lora_weights: dict[str, QDoubleSpinBox] = {}
 
         self.setMinimumSize(720, 560)
         self._build_ui()
@@ -261,6 +266,12 @@ class PromptCompilerDialog(QDialog):
         self._result_splitter.setStretchFactor(0, 1)
         self._result_splitter.setStretchFactor(1, 1)
         layout.addWidget(self._result_splitter, stretch=2)
+
+        # 캐릭터별 LoRA — 로컬 타깃 + loras.json이 있을 때만 보인다.
+        self._lora_group = QGroupBox()
+        self._lora_layout = QVBoxLayout(self._lora_group)
+        self._lora_group.setVisible(False)
+        layout.addWidget(self._lora_group)
 
         # 네거티브 (compiled negative 표시, 편집 가능)
         self._negative_label = QLabel()
@@ -399,6 +410,7 @@ class PromptCompilerDialog(QDialog):
             self._couple_edit.clear()
             self._json_edit.clear()
         self._local_hint_label.setVisible(local)
+        self._update_lora_visibility()
 
     def _copy_to_clipboard(self, text: str) -> None:
         """텍스트를 클립보드에 넣고 상태줄에 알린다."""
@@ -415,8 +427,20 @@ class PromptCompilerDialog(QDialog):
         return (width, height) if width > 0 and height > 0 else None
 
     def _character_loras(self) -> dict:
-        """캐릭터 id → LoraEntry. 다음 태스크에서 UI 선택으로 채운다."""
-        return {}
+        """캐릭터 id → LoraEntry (다이얼로그 선택 스냅숏).
+
+        레지스트리에 없는 id는 조용히 버린다 (레지스트리 파일이 바뀐 경우).
+        """
+        selected: dict = {}
+        for char_id, combo in self._lora_combos.items():
+            entry_id = combo.currentData()
+            if not entry_id:
+                continue
+            entry = self._compiler.lora_registry.get(entry_id)
+            if entry is None:
+                continue
+            selected[char_id] = replace(entry, weight=self._lora_weights[char_id].value())
+        return selected
 
     def _mode(self) -> str:
         return str(self.mode_combo.currentData())
@@ -668,6 +692,8 @@ class PromptCompilerDialog(QDialog):
         self._preview_browser.setPlainText("\n".join(lines).strip("\n"))
         self._final_edit.setPlainText(compiled.base_prompt)
         self._negative_edit.setPlainText(compiled.negative_prompt)
+        # 행이 먼저 있어야 _render_local_outputs가 현재 선택을 읽을 수 있다.
+        self._rebuild_lora_rows(compiled)
         self._render_local_outputs(compiled)
 
     def _render_local_outputs(self, compiled: CompiledPrompt) -> None:
@@ -683,6 +709,74 @@ class PromptCompilerDialog(QDialog):
         self._json_edit.setPlainText(
             json.dumps(emit_regional_json(compiled, preset, loras), ensure_ascii=False, indent=2)
         )
+
+    def _update_lora_visibility(self) -> None:
+        """로컬 타깃 + 레지스트리가 있을 때만 LoRA 그룹을 보인다."""
+        has_registry = bool(self._compiler.lora_registry)
+        self._lora_group.setVisible(self._is_local_target() and has_registry)
+
+    def _rebuild_lora_rows(self, compiled: CompiledPrompt) -> None:
+        """컴파일 결과의 캐릭터마다 LoRA 행을 만든다 (id 기준으로 선택 유지)."""
+        tr = self._i18n.get_text
+        self._lora_group.setTitle(tr("compiler.lora"))
+        previous = {
+            char_id: (combo.currentData(), self._lora_weights[char_id].value())
+            for char_id, combo in self._lora_combos.items()
+        }
+        while self._lora_layout.count():
+            item = self._lora_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._lora_combos.clear()
+        self._lora_weights.clear()
+
+        if compiled.target == NOVELAI_TARGET_ID or not self._compiler.lora_registry:
+            self._update_lora_visibility()
+            return
+
+        for char in compiled.characters:
+            row_widget = QWidget(self._lora_group)
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(QLabel(char.id))
+            combo = QComboBox()
+            combo.addItem(tr("compiler.lora_none"), None)
+            for entry_id in sorted(self._compiler.lora_registry):
+                combo.addItem(entry_id, entry_id)
+            row.addWidget(combo, stretch=1)
+            row.addWidget(QLabel(tr("compiler.lora_weight")))
+            weight = QDoubleSpinBox()
+            weight.setRange(0.0, 2.0)
+            weight.setSingleStep(0.05)
+            weight.setDecimals(2)
+            row.addWidget(weight)
+
+            saved_id, saved_weight = previous.get(char.id, (None, None))
+            index = combo.findData(saved_id) if saved_id else 0
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            if saved_weight is not None:
+                weight.setValue(saved_weight)
+            elif saved_id:
+                weight.setValue(self._compiler.lora_registry[saved_id].weight)
+            else:
+                weight.setValue(1.0)
+            # 선택 복원이 끝난 뒤에 연결한다 — 먼저 연결하면 복원이 콜백을 깨워
+            # 사용자가 조정한 가중치를 레지스트리 기본값으로 덮어쓴다.
+            combo.currentIndexChanged.connect(
+                lambda _i, cid=char.id: self._on_lora_selected(cid)
+            )
+
+            self._lora_layout.addWidget(row_widget)
+            self._lora_combos[char.id] = combo
+            self._lora_weights[char.id] = weight
+        self._update_lora_visibility()
+
+    def _on_lora_selected(self, char_id: str) -> None:
+        """LoRA를 고르면 가중치를 레지스트리 기본값으로 맞춘다."""
+        entry_id = self._lora_combos[char_id].currentData()
+        entry = self._compiler.lora_registry.get(entry_id) if entry_id else None
+        self._lora_weights[char_id].setValue(entry.weight if entry else 1.0)
 
     # ------------------------------------------------------------------
     # Apply (MainWindow가 의미를 결정 — 여기선 신호만 쏜다)

@@ -381,3 +381,119 @@ def test_novelai_target_apply_still_sends_characters(qapp, tmp_path):
     dialog._on_apply("apply")
     assert len(received[0].characters) == 2
     dialog.close()
+
+
+# --- 캐릭터별 LoRA ---------------------------------------------------------
+
+
+def _lora_dialog(tmp_path):
+    """loras.json이 있는 프리셋 폴더를 가리키는 다이얼로그."""
+    import json as _json
+
+    from naiauto.core.i18n.manager import I18nManager
+    from naiauto.core.prompt.history import PromptInputHistory
+    from naiauto.core.settings.schema import AppSettings
+
+    presets_dir = tmp_path / "presets"
+    presets_dir.mkdir()
+    (presets_dir / "loras.json").write_text(
+        _json.dumps(
+            {"kafka": {"file": "kafka.safetensors", "weight": 0.8, "triggers": ["kafka"]}}
+        ),
+        encoding="utf-8",
+    )
+    settings = AppSettings()
+    settings.compiler.target_presets_dir = str(presets_dir)
+    settings.compiler.default_target = "illustrious"
+    return PromptCompilerDialog(
+        I18nManager(), settings, history=PromptInputHistory(path=tmp_path / "h.json")
+    )
+
+
+def test_lora_group_hidden_without_registry(qapp, tmp_path):
+    dialog = _target_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("illustrious"))
+    dialog._render_preview(_local_compiled())
+    assert not dialog._lora_group.isVisibleTo(dialog)
+    dialog.close()
+
+
+def test_lora_rows_appear_per_character(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    assert set(dialog._lora_combos) == {"c1", "c2"}
+    assert dialog._lora_combos["c1"].itemData(0) is None  # "없음"
+    assert dialog._lora_combos["c1"].itemData(1) == "kafka"
+    dialog.close()
+
+
+def test_lora_group_hidden_on_novelai_target(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._render_preview(_local_compiled(target="novelai"))
+    assert not dialog._lora_group.isVisibleTo(dialog)
+    dialog.close()
+
+
+def test_lora_selection_survives_recompile(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._lora_weights["c1"].setValue(0.5)
+    dialog._render_preview(_local_compiled())  # 다시 변환한 셈
+    assert dialog._lora_combos["c1"].currentData() == "kafka"
+    assert dialog._lora_weights["c1"].value() == 0.5
+    dialog.close()
+
+
+def test_character_loras_snapshot_reflects_selection(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c2"].setCurrentIndex(1)
+    dialog._lora_weights["c2"].setValue(0.6)
+    loras = dialog._character_loras()
+    assert set(loras) == {"c2"}
+    assert loras["c2"].file == "kafka.safetensors"
+    assert loras["c2"].weight == 0.6
+    dialog.close()
+
+
+def test_selecting_lora_fills_registry_default_weight(qapp, tmp_path):
+    """LoRA를 고르면 가중치가 레지스트리 기본값(0.8)으로 맞춰진다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    assert dialog._lora_weights["c1"].value() == 0.8
+    dialog.close()
+
+
+def test_lora_appears_in_couple_mask_output(qapp, tmp_path):
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._render_preview(_local_compiled())
+    assert "<lora:kafka:0.8>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_lora_rows_cleared_when_result_has_no_characters(qapp, tmp_path):
+    """캐릭터가 없는 배경 프롬프트에서는 행이 남지 않아야 한다."""
+    from naiauto.core.prompt.schema import CompiledPrompt, ScenePrompt, TagRef
+
+    dialog = _lora_dialog(tmp_path)
+    dialog._render_preview(_local_compiled())
+    assert dialog._lora_combos
+    background = CompiledPrompt(
+        base_prompt="alley, night",
+        negative_prompt="",
+        scene=ScenePrompt(tags=(TagRef("alley"),)),
+        characters=(),
+        relationships=(),
+        mode="hybrid",
+        warnings=(),
+        unresolved=(),
+        target="illustrious",
+    )
+    dialog._render_preview(background)
+    assert dialog._lora_combos == {}
+    dialog.close()
