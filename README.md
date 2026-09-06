@@ -54,6 +54,7 @@ NovelAI Diffusion **V5** 이미지 생성을 자동화하는 데스크톱 앱입
 - **🌏 4개 언어** — 한국어 / English / 日本語 / 中文, 재시작 없이 전환
 - **🔔 새 버전 확인** — 릴리스가 올라오면 앱이 알려 줍니다 (자동 확인은 끌 수 있음)
 - **💬 자연어 프롬프트 컴파일러** — 장면을 자연어로 설명하면 Scene/Character/Relationship으로 분해하고 내장 태그 DB로 검증 (도구 → 자연어 프롬프트 컴파일러, Ctrl+Shift+P)
+- **로컬 SDXL 출력** — 컴파일 결과를 NovelAI 형식 대신 Illustrious·NoobAI·Animagine 등 로컬 SDXL 모델용 단일 Positive/Negative로 뽑는다. ComfyUI 영역 분할용 `COUPLE MASK` 문자열과 좌표 JSON도 함께 준다.
 
 ### 🤖 자연어 프롬프트 컴파일러 (Natural Language Prompt Compiler)
 
