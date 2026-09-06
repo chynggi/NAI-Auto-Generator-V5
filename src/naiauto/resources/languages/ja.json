@@ -357,7 +357,19 @@
       "err_auth": "認証に失敗しました",
       "err_parse": "LLMの応答を解析できませんでした",
       "err_empty": "結果が空です",
-      "warn_keyring": "システムキーリングを利用できないため、LLM APIキーを保存しませんでした。"
+      "warn_keyring": "システムキーリングを利用できないため、LLM APIキーを保存しませんでした。",
+      "target": "出力ターゲット",
+      "target_novelai": "NovelAI V5",
+      "tab_prompt": "プロンプト",
+      "tab_couple_mask": "COUPLE MASK",
+      "tab_regional_json": "領域 JSON",
+      "copy": "コピー",
+      "copied": "コピーしました。",
+      "local_hint": "キャラクタープロンプトは本文に統合されます。",
+      "couple_mask_hint": "ComfyUI 拡張 comfyui-prompt-control が必要です。",
+      "lora": "LoRA",
+      "lora_none": "なし",
+      "lora_weight": "重み"
     },
     "misc": {
       "login_state": "ログイン状態",

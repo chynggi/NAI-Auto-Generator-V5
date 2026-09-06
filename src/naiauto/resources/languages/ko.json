@@ -357,7 +357,19 @@
       "err_auth": "인증 실패",
       "err_parse": "LLM 응답을 해석하지 못했습니다",
       "err_empty": "결과가 비어 있습니다",
-      "warn_keyring": "시스템 키링을 사용할 수 없어 LLM API 키를 저장하지 않았습니다."
+      "warn_keyring": "시스템 키링을 사용할 수 없어 LLM API 키를 저장하지 않았습니다.",
+      "target": "출력 대상",
+      "target_novelai": "NovelAI V5",
+      "tab_prompt": "프롬프트",
+      "tab_couple_mask": "COUPLE MASK",
+      "tab_regional_json": "영역 JSON",
+      "copy": "복사",
+      "copied": "복사했습니다.",
+      "local_hint": "캐릭터 프롬프트는 본문에 합쳐집니다.",
+      "couple_mask_hint": "ComfyUI 확장 comfyui-prompt-control이 필요합니다.",
+      "lora": "LoRA",
+      "lora_none": "없음",
+      "lora_weight": "가중치"
     },
     "misc": {
       "login_state": "로그인 상태",

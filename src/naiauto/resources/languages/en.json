@@ -357,7 +357,19 @@
       "err_auth": "Authentication failed",
       "err_parse": "Could not parse the LLM response",
       "err_empty": "The result is empty",
-      "warn_keyring": "The system keyring is unavailable, so the LLM API key was not saved."
+      "warn_keyring": "The system keyring is unavailable, so the LLM API key was not saved.",
+      "target": "Output target",
+      "target_novelai": "NovelAI V5",
+      "tab_prompt": "Prompt",
+      "tab_couple_mask": "COUPLE MASK",
+      "tab_regional_json": "Region JSON",
+      "copy": "Copy",
+      "copied": "Copied.",
+      "local_hint": "Character prompts are merged into the main prompt.",
+      "couple_mask_hint": "Requires the ComfyUI extension comfyui-prompt-control.",
+      "lora": "LoRA",
+      "lora_none": "None",
+      "lora_weight": "Weight"
     },
     "misc": {
       "login_state": "Login State",

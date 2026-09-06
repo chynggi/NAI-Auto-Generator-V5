@@ -357,7 +357,19 @@
       "err_auth": "认证失败",
       "err_parse": "无法解析 LLM 响应",
       "err_empty": "结果为空",
-      "warn_keyring": "系统密钥环不可用，未保存 LLM API 密钥。"
+      "warn_keyring": "系统密钥环不可用，未保存 LLM API 密钥。",
+      "target": "输出目标",
+      "target_novelai": "NovelAI V5",
+      "tab_prompt": "提示词",
+      "tab_couple_mask": "COUPLE MASK",
+      "tab_regional_json": "区域 JSON",
+      "copy": "复制",
+      "copied": "已复制。",
+      "local_hint": "角色提示词会合并到正文中。",
+      "couple_mask_hint": "需要 ComfyUI 扩展 comfyui-prompt-control。",
+      "lora": "LoRA",
+      "lora_none": "无",
+      "lora_weight": "权重"
     },
     "misc": {
       "login_state": "登录状态",

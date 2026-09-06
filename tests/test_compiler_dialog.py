@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from naiauto.core.i18n.manager import default_languages_path
 from naiauto.ui.prompt_compiler_dialog import CompilerApplyPayload, PromptCompilerDialog
 
-#: Task 11이 4개 언어 파일에 추가해야 하는 compiler 섹션 키.
+#: 4개 언어 파일에 존재해야 하는 compiler 섹션 키.
 NEW_COMPILER_KEYS = (
     "err_connection",
     "err_timeout",
@@ -21,6 +21,19 @@ NEW_COMPILER_KEYS = (
     "result_relationship_row",
     "recent_inputs",
     "recent_placeholder",
+    # 출력 타깃 (로컬 SDXL)
+    "target",
+    "target_novelai",
+    "tab_prompt",
+    "tab_couple_mask",
+    "tab_regional_json",
+    "copy",
+    "copied",
+    "local_hint",
+    "couple_mask_hint",
+    "lora",
+    "lora_none",
+    "lora_weight",
 )
 
 
