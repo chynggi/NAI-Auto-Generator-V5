@@ -263,7 +263,11 @@ def _insert_lora_chain(
             "%s: cannot find model/clip links to splice LoRA into, skipping", template.id
         )
         return
+    # 원본 출처를 기억해 둔다 — 재결선 대상을 이걸로 고른다 (아래 참고).
+    origin_model = list(model_src)
+    origin_clip = list(clip_src)
 
+    chain_ids: set[str] = set()
     for lora in loras:
         node_id = _next_node_id(graph)
         graph[node_id] = {
@@ -276,17 +280,28 @@ def _insert_lora_chain(
                 "clip": clip_src,
             },
         }
+        chain_ids.add(node_id)
         model_src = [node_id, 0]
         clip_src = [node_id, 1]
 
-    # 체인 뒤로 재결선 — 방금 만든 로더 자신은 건드리지 않는다.
-    for node in graph.values():
-        if node.get("class_type") == "LoraLoader":
+    # 체인 뒤로 재결선.
+    #
+    # **원본 출처를 그대로 받던 노드만** 바꾼다. "class_type이 LoraLoader가 아닌
+    # 노드 전부"로 거르면 안 된다 — Anima 템플릿에는 UNET에서 model을 받는
+    # LoraLoaderModelOnly(터보 LoRA) 노드가 있는데, class_type이 정확히
+    # "LoraLoader"가 아니라 그 필터를 빠져나가 체인 끝을 가리키게 된다. 그러면
+    # 터보 노드와 체인 첫 노드가 서로를 가리키는 순환이 생기고 ComfyUI가 그래프를
+    # 거부한다.
+    #
+    # 우리가 방금 만든 로더는 id로 건너뛴다 — 체인 첫 노드의 model이 원본과
+    # 같으므로 값으로만 거르면 자기 자신을 자기 뒤로 돌린다.
+    for node_id, node in graph.items():
+        if node_id in chain_ids:
             continue
         inputs = node.get("inputs", {})
-        if isinstance(inputs.get("model"), list):
+        if inputs.get("model") == origin_model:
             inputs["model"] = list(model_src)
-        if isinstance(inputs.get("clip"), list):
+        if inputs.get("clip") == origin_clip:
             inputs["clip"] = list(clip_src)
 
 

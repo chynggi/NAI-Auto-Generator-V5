@@ -255,3 +255,81 @@ def test_no_loras_leaves_graph_unchanged_shape():
     g = build_graph(t, values={}, models={}, loras=())
     assert not [n for n in g.values() if n["class_type"] == "LoraLoader"]
     assert g["3"]["inputs"]["model"] == ["4", 0]
+
+
+#: Anima 모양 — UNET과 KSampler 사이에 터보 LoRA(LoraLoaderModelOnly)가 낀다.
+TURBO = {
+    "id": "turbo",
+    "name": "Turbo",
+    "output_node": "9",
+    "lora_mode": "direct",
+    "model_slots": {"unet": {"path": "4.unet_name", "from": "UNETLoader.unet_name"}},
+    "slots": {"positive": "6.text", "seed": "3.seed"},
+    "graph": {
+        "3": {"class_type": "KSampler", "inputs": {"seed": 0, "model": ["13", 0], "positive": ["6", 0]}},
+        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": ""}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["11", 0]}},
+        "9": {"class_type": "PreviewImage", "inputs": {"images": ["8", 0]}},
+        "11": {"class_type": "CLIPLoader", "inputs": {"clip_name": ""}},
+        "13": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"model": ["4", 0], "lora_name": "turbo.safetensors"},
+        },
+    },
+}
+
+
+def _link_cycle(graph):
+    """노드 링크에 순환이 있으면 그 경로를 돌려준다 (없으면 None)."""
+    edges = {
+        nid: [v[0] for v in node.get("inputs", {}).values() if isinstance(v, list) and v]
+        for nid, node in graph.items()
+    }
+    state: dict[str, int] = {}
+
+    def walk(nid, path):
+        if state.get(nid) == 1:
+            return path + [nid]
+        if state.get(nid) == 2:
+            return None
+        state[nid] = 1
+        for nxt in edges.get(nid, []):
+            found = walk(nxt, path + [nid])
+            if found:
+                return found
+        state[nid] = 2
+        return None
+
+    for nid in edges:
+        found = walk(nid, [])
+        if found:
+            return found
+    return None
+
+
+def test_lora_chain_does_not_cycle_through_a_model_only_loader():
+    """터보 LoRA(LoraLoaderModelOnly)를 체인 끝으로 돌리면 순환이 생긴다."""
+    template = parse_template(TURBO)
+    graph = build_graph(
+        template,
+        values={"seed": 7},
+        models={"unet": "a.safetensors"},
+        loras=(LoraAssignment(file="x.safetensors", weight=0.8),),
+    )
+    assert _link_cycle(graph) is None, f"순환: {_link_cycle(graph)}"
+
+
+def test_turbo_loader_keeps_reading_the_unet():
+    """터보 로더는 UNET 바로 뒤에 남아야 한다 — 체인은 그 뒤에 붙는다."""
+    template = parse_template(TURBO)
+    graph = build_graph(
+        template,
+        values={},
+        models={"unet": "a.safetensors"},
+        loras=(LoraAssignment(file="x.safetensors", weight=0.8),),
+    )
+    assert graph["13"]["inputs"]["model"] == ["4", 0]
+    chain = [i for i, n in graph.items() if n["class_type"] == "LoraLoader"]
+    assert len(chain) == 1
+    assert graph[chain[0]]["inputs"]["model"] == ["13", 0]
+    assert graph["3"]["inputs"]["model"] == [chain[0], 0]
