@@ -1,0 +1,56 @@
+{
+  "id": "anima",
+  "name": "Anima (UNET + Qwen3 CLIP)",
+  "requires_nodes": ["UNETLoader", "CLIPLoader", "VAELoader"],
+  "output_node": "9",
+  "lora_mode": "direct",
+  "model_slots": {
+    "unet": {"path": "4.unet_name", "from": "UNETLoader.unet_name"},
+    "clip": {"path": "11.clip_name", "from": "CLIPLoader.clip_name"},
+    "vae": {"path": "12.vae_name", "from": "VAELoader.vae_name"},
+    "turbo_lora": {"path": "13.lora_name", "from": "LoraLoaderModelOnly.lora_name"}
+  },
+  "slots": {
+    "positive": "6.text",
+    "negative": "7.text",
+    "seed": "3.seed",
+    "steps": "3.steps",
+    "cfg": "3.cfg",
+    "sampler": "3.sampler_name",
+    "scheduler": "3.scheduler",
+    "width": "5.width",
+    "height": "5.height"
+  },
+  "graph": {
+    "3": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0, "steps": 8, "cfg": 1.0,
+        "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+        "model": ["13", 0], "positive": ["6", 0], "negative": ["7", 0],
+        "latent_image": ["5", 0]
+      }
+    },
+    "4": {
+      "class_type": "UNETLoader",
+      "inputs": {"unet_name": "", "weight_dtype": "default"}
+    },
+    "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {"width": 832, "height": 1216, "batch_size": 1}
+    },
+    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["11", 0]}},
+    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["11", 0]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["12", 0]}},
+    "9": {"class_type": "PreviewImage", "inputs": {"images": ["8", 0]}},
+    "11": {
+      "class_type": "CLIPLoader",
+      "inputs": {"clip_name": "", "type": "stable_diffusion", "device": "default"}
+    },
+    "12": {"class_type": "VAELoader", "inputs": {"vae_name": ""}},
+    "13": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {"model": ["4", 0], "lora_name": "", "strength_model": 1.0}
+    }
+  }
+}
