@@ -57,3 +57,38 @@ def test_generation_request_accepts_merge_output():
     req = GenerationRequest(prompt=out.prompt, negative_prompt=out.negative_prompt,
                             characters=out.characters)
     assert req.characters[0].prompt == "silver_hair"
+
+
+def _compiled_with_target(target: str):
+    return CompiledPrompt(
+        base_prompt="2girls, rain",
+        negative_prompt="lowres",
+        scene=ScenePrompt(tags=(TagRef("rain"),)),
+        characters=(
+            CharacterPrompt(id="c1", tags=(TagRef("silver_hair"),), prompt_text="silver_hair"),
+        ),
+        relationships=(),
+        mode="hybrid",
+        warnings=(),
+        unresolved=(),
+        target=target,
+    )
+
+
+def test_novelai_target_keeps_character_captions():
+    result = to_generation_data(_compiled_with_target("novelai"))
+    assert len(result.characters) == 1
+    assert result.characters[0].prompt == "silver_hair"
+
+
+def test_local_target_drops_character_captions():
+    result = to_generation_data(_compiled_with_target("illustrious"))
+    assert result.characters == ()
+    assert result.prompt == "2girls, rain"
+    assert result.negative_prompt == "lowres"
+
+
+def test_local_target_still_merges_existing_negative():
+    """캐릭터만 비울 뿐, 기존 사용자 네거티브 병합은 그대로 동작해야 한다."""
+    result = to_generation_data(_compiled_with_target("illustrious"), existing_negative="bad hands")
+    assert result.negative_prompt == "bad hands, lowres"
