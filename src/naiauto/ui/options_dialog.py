@@ -73,6 +73,7 @@ NAV_ORDER: tuple[str, ...] = (
     PAGE_RESOLUTION,
     "interface",
     "prompt_ai",
+    "local_backend",
     "tags",
     "llm",
     "log",
