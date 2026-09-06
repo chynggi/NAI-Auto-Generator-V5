@@ -49,9 +49,7 @@ def test_executed_carries_images():
                 "node": "9",
                 "prompt_id": PID,
                 "output": {
-                    "images": [
-                        {"filename": "x_temp_abcde_00001_.png", "subfolder": "", "type": "temp"}
-                    ]
+                    "images": [{"filename": "x_temp_abcde_00001_.png", "subfolder": "", "type": "temp"}]
                 },
             },
         }
@@ -115,7 +113,13 @@ def test_executed_without_images_is_ignored():
 @pytest.mark.parametrize(
     "raw",
     [
-        "", "not json", "[]", "null", "123", b"", b"\x00\x01",
+        "",
+        "not json",
+        "[]",
+        "null",
+        "123",
+        b"",
+        b"\x00\x01",
         '{"type": "progress_state"}',
         '{"type": "progress_state", "data": null}',
         '{"type": "progress_state", "data": {"prompt_id": "P", "nodes": null}}',

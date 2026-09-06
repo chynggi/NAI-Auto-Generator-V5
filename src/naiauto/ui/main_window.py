@@ -1285,9 +1285,7 @@ class MainWindow(QMainWindow):
             self.backend_combo.setCurrentIndex(previous_index if previous_index >= 0 else 0)
             self.backend_combo.blockSignals(False)
             self._settings.generation_backend = previous
-            self.statusBar().showMessage(
-                self._i18n.get_text("errors.generation_error"), 5000
-            )
+            self.statusBar().showMessage(self._i18n.get_text("errors.generation_error"), 5000)
             return
         # 로컬 백엔드에는 Anlas/크레딧 개념이 없다 — 게이지들을 숨긴다.
         is_novelai = backend_id == "novelai"
@@ -1306,9 +1304,7 @@ class MainWindow(QMainWindow):
         comfy = self._settings.comfyui
         template = self._comfy_template()
         if template is None:
-            self.statusBar().showMessage(
-                self._i18n.get_text("errors.comfy_no_template"), 5000
-            )
+            self.statusBar().showMessage(self._i18n.get_text("errors.comfy_no_template"), 5000)
         return ComfyUIBackend(
             base_url=comfy.base_url,
             template=template,
@@ -1820,10 +1816,7 @@ class MainWindow(QMainWindow):
 
         # 스펙 §3.6 안전망: COUPLE MASK 좌표 문법을 확장 없는 템플릿에 보내면
         # 그대로 문자열로 인코딩돼 에러 없이 결과만 망가진다 — 생성 전에 막는다.
-        if (
-            self._settings.generation_backend == "comfyui"
-            and "COUPLE MASK(" in prompt
-        ):
+        if self._settings.generation_backend == "comfyui" and "COUPLE MASK(" in prompt:
             template = self._comfy_template()
             if template is not None and template.lora_mode != "delegate":
                 tr = self._i18n.get_text

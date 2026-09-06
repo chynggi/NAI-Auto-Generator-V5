@@ -214,9 +214,7 @@ class LocalBackendPage(OptionsPage):
         self._template_combo.blockSignals(True)
         self._template_combo.clear()
         for template in self._templates:
-            if self._object_info is not None and not template.is_available(
-                self._object_info.node_classes
-            ):
+            if self._object_info is not None and not template.is_available(self._object_info.node_classes):
                 continue
             self._template_combo.addItem(template.name, template.id)
         if current is not None:

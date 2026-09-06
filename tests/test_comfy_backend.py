@@ -22,9 +22,7 @@ TEMPLATE = parse_template(
         "id": "t",
         "name": "T",
         "output_node": "9",
-        "model_slots": {
-            "checkpoint": {"path": "4.ckpt_name", "from": "CheckpointLoaderSimple.ckpt_name"}
-        },
+        "model_slots": {"checkpoint": {"path": "4.ckpt_name", "from": "CheckpointLoaderSimple.ckpt_name"}},
         "slots": {"positive": "6.text", "seed": "3.seed"},
         "graph": {
             "3": {"inputs": {"seed": 0, "model": ["4", 0]}, "class_type": "KSampler"},
@@ -122,9 +120,7 @@ def test_websocket_opens_before_post(monkeypatch):
     order = []
     ws = _StubWS([EXECUTED])
 
-    backend = ComfyUIBackend(
-        base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0
-    )
+    backend = ComfyUIBackend(base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0)
 
     def _connect(url, **kwargs):
         order.append("ws")
@@ -240,9 +236,7 @@ def test_execution_error_is_raised(monkeypatch):
 
 
 def test_socket_drop_falls_back_to_history(monkeypatch):
-    history = {
-        PID: {"outputs": {"9": {"images": [{"filename": "h.png", "subfolder": "", "type": "temp"}]}}}
-    }
+    history = {PID: {"outputs": {"9": {"images": [{"filename": "h.png", "subfolder": "", "type": "temp"}]}}}}
     backend, calls = _backend(monkeypatch, frames=[], history=history)
     result = backend.generate(REQ)
     assert result.raw_bytes == b"PNG"
@@ -266,17 +260,13 @@ def test_stop_sends_interrupt(monkeypatch):
 
 
 def test_missing_template_raises(monkeypatch):
-    backend = ComfyUIBackend(
-        base_url="http://127.0.0.1:8188", template=None, model_slots={}, timeout=1.0
-    )
+    backend = ComfyUIBackend(base_url="http://127.0.0.1:8188", template=None, model_slots={}, timeout=1.0)
     with pytest.raises(ComfyTemplateError):
         backend.generate(REQ)
 
 
 def test_connection_failure_is_wrapped(monkeypatch):
-    backend = ComfyUIBackend(
-        base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0
-    )
+    backend = ComfyUIBackend(base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0)
 
     def _boom():
         raise OSError("refused")
@@ -287,7 +277,5 @@ def test_connection_failure_is_wrapped(monkeypatch):
 
 
 def test_supports_credit_is_false():
-    backend = ComfyUIBackend(
-        base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0
-    )
+    backend = ComfyUIBackend(base_url="http://127.0.0.1:8188", template=TEMPLATE, model_slots={}, timeout=1.0)
     assert backend.supports_credit is False

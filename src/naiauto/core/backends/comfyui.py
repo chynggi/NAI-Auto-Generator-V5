@@ -179,9 +179,7 @@ class ComfyUIBackend:
             socket.connect(url)
             return socket
         except Exception as exc:  # noqa: BLE001 - 소켓 라이브러리마다 예외가 다르다
-            raise ComfyConnectionError(
-                f"cannot open ComfyUI websocket at {self.base_url}: {exc}"
-            ) from exc
+            raise ComfyConnectionError(f"cannot open ComfyUI websocket at {self.base_url}: {exc}") from exc
 
     def _await_images(self, socket, prompt_id: str) -> tuple[dict, ...]:
         """executed를 기다린다. 소켓이 끊기면 /history를 1회 확인한다."""
