@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from ...core.i18n.manager import I18nManager
 from ...core.prompt.providers import API_KEY_CREDENTIAL
+from ...core.prompt.targets import NOVELAI_TARGET_ID, load_lora_registry, load_target_presets
 from ...core.settings import credentials
 from ...core.settings.schema import AppSettings
 from . import OptionsPage, register_page
@@ -216,6 +217,29 @@ class PromptAiPage(OptionsPage):
         for _key, value in RELATIONSHIP_ITEMS:
             self.relationship_combo.addItem(value, value)
         compiler_form.addRow(self.relationship_label, self.relationship_combo)
+
+        # ── 출력 타깃 (로컬 SDXL) ──
+        # 프리셋 내용 편집 UI는 만들지 않는다 — 사용자가 폴더의 JSON을 직접 고치고
+        # 앱은 로드된 것만 보여 준다 (loras.json과 같은 정책).
+        self.target_label = QLabel(self)
+        self.target_combo = QComboBox(self)
+        for preset in load_target_presets(None):
+            self.target_combo.addItem(preset.name, preset.id)
+        compiler_form.addRow(self.target_label, self.target_combo)
+
+        self.presets_dir_label = QLabel(self)
+        self.presets_dir_edit = QLineEdit(self)
+        self.presets_dir_edit.textChanged.connect(self._refresh_target_sources)
+        self.presets_dir_browse = QPushButton(self)
+        self.presets_dir_browse.clicked.connect(self._browse_presets_dir)
+        presets_row = QHBoxLayout()
+        presets_row.addWidget(self.presets_dir_edit, 1)
+        presets_row.addWidget(self.presets_dir_browse)
+        compiler_form.addRow(self.presets_dir_label, presets_row)
+
+        self.lora_status_label = QLabel(self)
+        compiler_form.addRow(self.lora_status_label)
+
         root.addLayout(compiler_form)
 
         root.addStretch(1)
@@ -241,6 +265,12 @@ class PromptAiPage(OptionsPage):
         self.use_resolver_check.setChecked(draft.compiler.use_danbooru_resolver)
         self.preserve_nl_check.setChecked(draft.compiler.preserve_natural_language)
         self._select(self.relationship_combo, draft.compiler.relationship_style)
+        # 폴더를 먼저 채우고 콤보를 다시 만든 다음에 타깃을 골라야 사용자 프리셋
+        # id를 찾을 수 있다 (콤보가 내장 프리셋만 든 채로는 findData가 실패한다).
+        self.presets_dir_edit.setText(draft.compiler.target_presets_dir)
+        self._refresh_target_sources()
+        index = self.target_combo.findData(draft.compiler.default_target)
+        self.target_combo.setCurrentIndex(index if index >= 0 else 0)
 
         # API 키는 입력란에 실지 않는다 — 키링 존재 여부만 표시한다 (§28, §64).
         # load_credential은 keyring 미사용 시 빈 문자열을 주므로 존재 확인만으로 충분하다.
@@ -279,6 +309,8 @@ class PromptAiPage(OptionsPage):
         draft.compiler.use_danbooru_resolver = self.use_resolver_check.isChecked()
         draft.compiler.preserve_natural_language = self.preserve_nl_check.isChecked()
         draft.compiler.relationship_style = self.relationship_combo.currentData()
+        draft.compiler.target_presets_dir = self.presets_dir_edit.text().strip()
+        draft.compiler.default_target = self.target_combo.currentData() or NOVELAI_TARGET_ID
 
         self._notices = []
         if self.delete_key_check.isChecked():
@@ -340,6 +372,10 @@ class PromptAiPage(OptionsPage):
         self.relationship_label.setText(tr("options.compiler_relationship_style"))
         for index, (key, _value) in enumerate(RELATIONSHIP_ITEMS):
             self.relationship_combo.setItemText(index, tr(key))
+        self.target_label.setText(tr("options.compiler_target"))
+        self.presets_dir_label.setText(tr("options.compiler_target_presets_dir"))
+        self.presets_dir_browse.setText(tr("options.browse"))
+        self._refresh_target_sources()
 
     def notices(self) -> tuple[str, ...]:
         return tuple(self._notices)
@@ -390,6 +426,36 @@ class PromptAiPage(OptionsPage):
         )
         if path:
             self.server_path_edit.setText(path)
+
+    def _browse_presets_dir(self) -> None:
+        """타깃 프리셋 + loras.json이 든 폴더를 고른다."""
+        tr = self._i18n.get_text
+        path = QFileDialog.getExistingDirectory(
+            self,
+            tr("options.choose_folder", tr("options.compiler_target_presets_dir")),
+            self.presets_dir_edit.text(),
+        )
+        if path:
+            self.presets_dir_edit.setText(path)
+
+    def _refresh_target_sources(self) -> None:
+        """폴더가 바뀌면 타깃 콤보와 LoRA 상태 문구를 다시 만든다."""
+        tr = self._i18n.get_text
+        directory = self.presets_dir_edit.text().strip()
+        current = self.target_combo.currentData()
+        self.target_combo.blockSignals(True)
+        self.target_combo.clear()
+        for preset in load_target_presets(directory):
+            self.target_combo.addItem(preset.name, preset.id)
+        index = self.target_combo.findData(current)
+        self.target_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.target_combo.blockSignals(False)
+        count = len(load_lora_registry(directory))
+        self.lora_status_label.setText(
+            tr("options.compiler_lora_loaded", count)
+            if count
+            else tr("options.compiler_lora_missing")
+        )
 
     def _browse_model(self) -> None:
         """GGUF 모델 파일 선택 다이얼로그."""
