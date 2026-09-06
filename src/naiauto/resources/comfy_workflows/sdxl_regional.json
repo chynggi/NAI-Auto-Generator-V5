@@ -1,0 +1,45 @@
+{
+  "id": "sdxl_regional",
+  "name": "SDXL 리저널 (prompt-control)",
+  "requires_nodes": ["PCLazyTextEncode", "PCLazyLoraLoader"],
+  "output_node": "9",
+  "lora_mode": "delegate",
+  "model_slots": {
+    "checkpoint": {"path": "4.ckpt_name", "from": "CheckpointLoaderSimple.ckpt_name"}
+  },
+  "slots": {
+    "positive": "6.text",
+    "negative": "7.text",
+    "seed": "3.seed",
+    "steps": "3.steps",
+    "cfg": "3.cfg",
+    "sampler": "3.sampler_name",
+    "scheduler": "3.scheduler",
+    "width": "5.width",
+    "height": "5.height"
+  },
+  "graph": {
+    "3": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0, "steps": 28, "cfg": 6.0,
+        "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1.0,
+        "model": ["10", 0], "positive": ["6", 0], "negative": ["7", 0],
+        "latent_image": ["5", 0]
+      }
+    },
+    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ""}},
+    "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {"width": 832, "height": 1216, "batch_size": 1}
+    },
+    "6": {"class_type": "PCLazyTextEncode", "inputs": {"text": "", "clip": ["10", 1]}},
+    "7": {"class_type": "PCLazyTextEncode", "inputs": {"text": "", "clip": ["10", 1]}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+    "9": {"class_type": "PreviewImage", "inputs": {"images": ["8", 0]}},
+    "10": {
+      "class_type": "PCLazyLoraLoader",
+      "inputs": {"model": ["4", 0], "clip": ["4", 1], "text": ""}
+    }
+  }
+}

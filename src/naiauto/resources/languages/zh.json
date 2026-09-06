@@ -104,7 +104,10 @@
       "section_collapsed": "已折叠",
       "options_menu": "选项...",
       "manual_position": "手动位置",
-      "toggle_slot": "折叠 / 展开该角色"
+      "toggle_slot": "折叠 / 展开该角色",
+      "backend": "后端",
+      "backend_novelai": "NovelAI",
+      "backend_comfyui": "ComfyUI (本地)"
     },
     "image_options": {
       "title": "图像选项",
@@ -303,7 +306,13 @@
       "fixed_seed_batch": "连续生成需要随机种子。请启用种子“随机”选项，或将生成张数设为 1。",
       "wd14_model_missing": "未找到 WD14 模型（缺少 {}）。\n\n{}\n\n请在 选项 → 标签 中指定模型文件夹，并点击“下载模型”。",
       "wd14_runtime_missing": "无法使用 WD14 自动标签。\n\n无法导入 onnxruntime：\n{}\n\n若从源码运行，请执行 `pip install -e .`（或 `pip install onnxruntime numpy`）。\n若使用发行版（exe），v0.6.7 及以上版本已内置。",
-      "duplicate_generation": "提示词、种子与分辨率与上次生成完全相同。请修改种子或打开种子“随机”后再生成。"
+      "duplicate_generation": "提示词、种子与分辨率与上次生成完全相同。请修改种子或打开种子“随机”后再生成。",
+      "comfy_connection": "无法连接 ComfyUI ({0})。请确认服务器正在运行。",
+      "comfy_rejected": "ComfyUI 拒绝了请求: {0}",
+      "comfy_execution": "ComfyUI 执行错误 ({0}): {1}",
+      "comfy_timeout": "ComfyUI 响应超时。",
+      "comfy_no_template": "请先选择工作流 (选项 → 本地生成)。",
+      "comfy_coupling_unsupported": "所选工作流不支持 COUPLE MASK 坐标语法。请选择 sdxl_regional 或使用无坐标的输出。"
     },
     "connection": {
       "server": "服务器:",
@@ -532,7 +541,18 @@
       "llm_connect_ok": "已连接到 {} 的 LM Studio 服务器。",
       "llm_connect_failed": "无法连接到 {}。请确认 LM Studio 应用已打开并启动了服务器，且地址正确。",
       "llm_models_found": "找到 {} 个已加载的模型。",
-      "llm_no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。"
+      "llm_no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。",
+      "local_backend_section": "ComfyUI 连接",
+      "local_backend_url": "服务器地址",
+      "local_backend_test": "测试连接",
+      "local_backend_ok": "已连接 — {0} 种节点",
+      "local_backend_failed": "无法连接: {0}",
+      "local_backend_workflow": "工作流",
+      "local_backend_workflow_dir": "用户工作流文件夹",
+      "local_backend_models_section": "模型",
+      "local_backend_model_none": "(无)",
+      "local_backend_no_options": "请先运行连接测试",
+      "local_backend_timeout": "超时 (秒)"
     },
     "resolution": {
       "title": "分辨率",
@@ -565,7 +585,9 @@
       "llm": "提示词生成 (LLM)",
       "llm_desc": "配置用于自然语言提示词生成的 LM Studio 本地 LLM 连接。",
       "log": "日志设置",
-      "log_desc": "管理调试模式和日志设置。"
+      "log_desc": "管理调试模式和日志设置。",
+      "local_backend": "本地生成",
+      "local_backend_desc": "设置本地 ComfyUI 服务器地址、工作流和模型。"
     },
     "gallery": {
       "title": "提示管理器",

@@ -134,7 +134,8 @@ def test_supports_credit_defaults_true_for_legacy_client():
 def test_real_nai_client_is_a_backend():
     from naiauto.core.api.client import NAIClient
 
-    assert issubclass(NAIClient, ImageBackend) or isinstance.__self__ is not None
+    # ImageBackend는 메서드만 가진 Protocol이라 issubclass가 쓸 수 있다.
+    assert issubclass(NAIClient, ImageBackend)
     assert backend_supports_credit(NAIClient.__new__(NAIClient)) is True
 ```
 
@@ -1093,7 +1094,9 @@ Expected: FAIL — `ImportError: cannot import name 'build_graph'`
 _LORA_TAG_RE = re.compile(r"<lora:[^>]*>")
 
 #: 태그를 뺀 자리에 남는 쉼표/공백 정리.
-_TIDY_RE = re.compile(r"\s*,\s*")
+#: `+`가 핵심이다 — 쉼표를 하나만 소비하면 "a, <lora>, b"가 "a, , b"로 남는다.
+#: 태그가 프롬프트 중간에 오거나 여러 개 겹치는 건 흔한 사용 패턴이다.
+_TIDY_RE = re.compile(r"(?:\s*,\s*)+")
 
 
 @dataclass(frozen=True)
@@ -1146,6 +1149,11 @@ def _insert_lora_chain(
         )
         return
 
+    # 원본 출처를 기억해 둔다 — 재결선 대상을 이걸로 고른다 (아래 참고).
+    origin_model = list(model_src)
+    origin_clip = list(clip_src)
+
+    chain_ids: set[str] = set()
     for lora in loras:
         node_id = _next_node_id(graph)
         graph[node_id] = {
@@ -1158,20 +1166,29 @@ def _insert_lora_chain(
                 "clip": clip_src,
             },
         }
+        chain_ids.add(node_id)
         model_src = [node_id, 0]
         clip_src = [node_id, 1]
 
-    # 체인 뒤로 재결선 — 방금 만든 로더 자신은 건드리지 않는다.
-    chain_ids = {model_src[0], clip_src[0]}
+    # 체인 뒤로 재결선.
+    #
+    # **원본 출처를 그대로 받던 노드만** 바꾼다. "class_type이 LoraLoader가 아닌
+    # 노드 전부"로 거르면 안 된다 — Anima 템플릿에는 UNET에서 model을 받는
+    # LoraLoaderModelOnly(터보 LoRA) 노드가 있는데, class_type이 정확히
+    # "LoraLoader"가 아니라 그 필터를 빠져나가 체인 끝을 가리키게 된다. 그러면
+    # 터보 노드와 체인 첫 노드가 서로를 가리키는 순환이 생기고 ComfyUI가 그래프를
+    # 거부한다. (계획 작성 중 실제 anima 그래프로 재현해 확인했다.)
+    #
+    # 우리가 방금 만든 로더는 id로 건너뛴다 — 체인 첫 노드의 model이 원본과
+    # 같으므로 값으로만 거르면 자기 자신을 자기 뒤로 돌린다.
     for node_id, node in graph.items():
-        if node.get("class_type") == "LoraLoader":
+        if node_id in chain_ids:
             continue
         inputs = node.get("inputs", {})
-        if isinstance(inputs.get("model"), list):
+        if inputs.get("model") == origin_model:
             inputs["model"] = list(model_src)
-        if isinstance(inputs.get("clip"), list):
+        if inputs.get("clip") == origin_clip:
             inputs["clip"] = list(clip_src)
-    _ = chain_ids  # 가독성용 — 로더는 위 continue로 이미 제외된다
 
 
 def build_graph(
@@ -1539,9 +1556,20 @@ def test_execution_error():
 
 
 def test_other_prompt_ids_are_ignored():
-    """여러 클라이언트가 붙어 있을 수 있다 — 남의 작업 메시지를 먹으면 안 된다."""
+    """여러 클라이언트가 붙어 있을 수 있다 — 남의 작업 메시지를 먹으면 안 된다.
+
+    output을 비우면 안 된다 — 필터를 꺼도 "이미지 없음"으로 None이 나와
+    테스트가 엉뚱한 이유로 통과한다 (실제로 그랬다).
+    """
     raw = json.dumps(
-        {"type": "executed", "data": {"node": "9", "prompt_id": "other", "output": {}}}
+        {
+            "type": "executed",
+            "data": {
+                "node": "9",
+                "prompt_id": "other",
+                "output": {"images": [{"filename": "x.png", "subfolder": "", "type": "temp"}]},
+            },
+        }
     )
     assert parse_message(raw, PID) is None
 
@@ -1884,6 +1912,47 @@ def test_view_uses_temp_type(monkeypatch):
     view_url = next(u for u in calls["get"] if "/view" in u)
     assert "type=temp" in view_url
     assert "filename=a.png" in view_url
+
+
+def test_only_output_node_is_accepted(monkeypatch):
+    """PreviewImage가 아닌 노드도 executed를 낸다 — output_node만 받는다.
+
+    필터가 없으면 먼저 온 다른 노드의 이미지를 가져가 버린다.
+    """
+    other = json.dumps(
+        {
+            "type": "executed",
+            "data": {
+                "node": "8",
+                "prompt_id": PID,
+                "output": {"images": [{"filename": "other.png", "subfolder": "", "type": "temp"}]},
+            },
+        }
+    )
+    backend, calls = _backend(monkeypatch, frames=[other, EXECUTED])
+    backend.generate(REQ)
+    view_url = next(u for u in calls["get"] if "/view" in u)
+    assert "filename=a.png" in view_url
+
+
+def test_progress_is_forwarded(monkeypatch):
+    """샘플링 진행률은 콜백으로 흘러나간다 — UI 진행 바의 원천이다."""
+    progress = json.dumps({"type": "progress", "data": {"value": 3, "max": 20, "prompt_id": PID}})
+    seen = []
+    backend = ComfyUIBackend(
+        base_url="http://127.0.0.1:8188",
+        template=TEMPLATE,
+        model_slots={},
+        timeout=1.0,
+        on_progress=lambda value, maximum: seen.append((value, maximum)),
+    )
+    ws = _StubWS([progress, EXECUTED])
+    monkeypatch.setattr(backend, "_make_socket", lambda: ws)
+    monkeypatch.setattr(backend, "_new_prompt_id", lambda: PID)
+    monkeypatch.setattr(backend, "_post_json", lambda url, payload, **kw: {"prompt_id": PID})
+    monkeypatch.setattr(backend, "_get_bytes", lambda url, **kw: b"PNG")
+    backend.generate(REQ)
+    assert seen == [(3, 20)]
 
 
 def test_prompt_rejected_surfaces_node_errors(monkeypatch):

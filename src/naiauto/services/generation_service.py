@@ -23,10 +23,10 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
-from ..core.api.client import NAIClient
 from ..core.api.errors import NAIError, NetworkError, RateLimitError, ServerBusyError
 from ..core.api.models import CharacterCaption, GenerationRequest
 from ..core.artist_combos import ArtistComboEngine
+from ..core.backends.base import ImageBackend, backend_supports_credit
 from ..core.credit_estimator import CreditObservation
 from ..core.metadata.save import save_raw_png
 from ..core.pipe_characters import split_pipe_characters
@@ -95,7 +95,7 @@ class GenerationJob:
 class GenerationService:
     def __init__(
         self,
-        client: NAIClient,
+        client: ImageBackend,
         wildcards: WildcardApplier | None = None,
         artist_combos: ArtistComboEngine | None = None,
         on_event: Callable[[GenerationEvent], None] = lambda e: None,
@@ -135,6 +135,23 @@ class GenerationService:
         engine = ArtistComboEngine(combos_dir)
         engine.load()
         self._artist_combos = engine
+
+    # ── 백엔드 ─────────────────────────────────────────────
+
+    @property
+    def backend(self) -> ImageBackend:
+        """현재 생성 백엔드."""
+        return self._client
+
+    def set_backend(self, backend: ImageBackend) -> None:
+        """백엔드를 갈아 끼운다. 생성 중에는 거부한다.
+
+        진행 중인 잡이 요청을 보낸 서버와 결과를 회수할 서버가 달라지면
+        이미지가 사라진다.
+        """
+        if self._running:
+            raise RuntimeError("cannot swap backend while a job is running")
+        self._client = backend
 
     # ── 제어 ──────────────────────────────────────────────
 
@@ -323,6 +340,10 @@ class GenerationService:
 
         측정 때문에 생성이 멈추면 안 되므로 어떤 예외도 삼킨다.
         """
+        # 로컬 백엔드는 Anlas/크레딧 개념이 없다 — 조회 자체를 하지 않는다.
+        if not backend_supports_credit(self._client):
+            return
+
         try:
             info = self._client.get_anlas()
         except Exception as e:  # 측정은 부가 기능 — 잡을 방해하지 않는다

@@ -67,3 +67,47 @@ def test_old_settings_without_target_still_load():
     settings = AppSettings.model_validate({"compiler": {"default_mode": "tag"}})
     assert settings.compiler.default_mode == "tag"
     assert settings.compiler.default_target == "novelai"
+
+
+def test_comfyui_settings_defaults():
+    from naiauto.core.settings.schema import AppSettings
+
+    s = AppSettings()
+    assert s.generation_backend == "novelai"
+    assert s.comfyui.base_url == "http://127.0.0.1:8188"
+    assert s.comfyui.template_id == "sdxl_basic"
+    assert s.comfyui.model_slots == {}
+    assert s.comfyui.timeout_seconds == 300.0
+    assert s.comfyui.workflows_dir == ""
+
+
+def test_old_settings_file_loads_without_migration(tmp_path):
+    """새 필드가 전부 기본값을 가지므로 기존 settings.json이 그대로 열린다."""
+    import json
+
+    from naiauto.core.settings.schema import AppSettings
+
+    old = {"schema_version": 1, "language": "ko"}
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(old), encoding="utf-8")
+    s = AppSettings.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    assert s.generation_backend == "novelai"
+
+
+def test_model_slots_are_nested_per_template():
+    """슬롯 이름은 템플릿마다 다르므로 템플릿 id로 한 겹 감싼다."""
+    from naiauto.core.settings.schema import AppSettings
+
+    s = AppSettings()
+    s.comfyui.model_slots["anima"] = {"unet": "a.safetensors", "vae": "b.safetensors"}
+    dumped = s.model_dump()
+    restored = AppSettings.model_validate(dumped)
+    assert restored.comfyui.model_slots["anima"]["unet"] == "a.safetensors"
+
+
+def test_comfyui_fields_are_owned_by_options_dialog():
+    """옵션 페이지가 편집하는 필드는 OWNED_FIELDS에 있어야 저장된다."""
+    from naiauto.ui.options_dialog import OWNED_FIELDS
+
+    assert "comfyui" in OWNED_FIELDS
+    assert "generation_backend" in OWNED_FIELDS

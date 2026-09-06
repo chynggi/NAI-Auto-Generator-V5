@@ -24,6 +24,7 @@
    - [캐릭터 프롬프트](#캐릭터-프롬프트)
    - [캐릭터 프롬프트](#캐릭터-프롬프트)
    - [자연어 프롬프트 컴파일러](#자연어-프롬프트-컴파일러)
+   - [로컬 생성 (ComfyUI)](#로컬-생성-comfyui)
    - [강화 업스케일 (Enhance)](#강화-업스케일-enhance)
    - [아티스트 조합](#아티스트-조합)
    - [세팅별 연속 생성](#세팅별-연속-생성)
@@ -461,6 +462,83 @@ Regional Prompter가 비율 분할만 지원해 임의 좌표를 표현할 수 �
 - `id`를 `novelai`로 쓰면 무시된다 (예약어).
 
 깨진 JSON은 그 파일만 건너뛰고 나머지는 정상 동작한다.
+
+---
+
+### 로컬 생성 (ComfyUI)
+
+NovelAI 대신 **로컬 ComfyUI 서버**로 생성할 수 있다. 옵션 → **로컬 생성**에서
+주소와 워크플로·모델을 고르고, 메인 창의 백엔드를 `ComfyUI (로컬)`로 바꿔 쓴다.
+위의 자연어 프롬프트 컴파일러에서 **로컬 SDXL/Anima로 뽑기**를 골라 뽑은
+프롬프트를 그대로 로컬에서 생성하는 흐름이 전제다 — 컴파일러가 내보내는
+`<lora:...>` 태그는 워크플로의 LoRA 모드에 따라 자동으로 처리된다.
+
+로컬 백엔드에는 Anlas/크레딧 개념이 없다 — **Anlas 표시와 크레딧 소모량 측정이
+꺼진다.**
+
+#### 설정 순서
+
+1. ComfyUI를 켜 둔다 (기본 주소 `http://127.0.0.1:8188`)
+2. 옵션 → **로컬 생성**에서 서버 주소를 입력하고 **연결 확인**을 누른다
+   (알 수 있는 노드 종류가 표시되면 연결됨)
+3. **워크플로**를 고른다 — 서버에 필요한 노드가 없으면 목록에서 빠진다
+4. **모델 슬롯**을 고른다 — 슬롯 개수는 워크플로마다 다르다
+5. 메인 창에서 백엔드 콤보를 `ComfyUI (로컬)`로 바꾼다
+   (색플러·스케줄러 목록이 서버가 알려준 값으로 바뀐다)
+
+연결 확인을 누르지 않아도 저장된 설정은 유지된다. 서버가 꺼져 있을 때
+모델 선택은 저장된 값 하나만 보인다 — 목록을 못 받았다고 설정이 날아가지
+않는다.
+
+#### 내장 워크플로
+
+| id | 이름 | 필요한 것 | 비고 |
+|---|---|---|---|
+| `sdxl_basic` | SDXL 기본 | 없음 | 가장 짧은 파이프라인 |
+| `sdxl_regional` | SDXL 리저널 | **comfyui-prompt-control 확장** | `COUPLE MASK` 지원 |
+| `anima` | Anima (UNET + Qwen3 CLIP) | UNETLoader / CLIPLoader / VAELoader | 터보 LoRA 전용 |
+
+`sdxl_regional`을 쓰려면 ComfyUI에
+[`asagi4/comfyui-prompt-control`](https://github.com/asagi4/comfyui-prompt-control)
+확장이 설치되어 있어야 한다. 컴파일러가 내보내는 `COUPLE MASK` 좌표 문법은
+**이 워크플로에서만** 동작한다 — 다른 워크플로를 고른 채 좌표를 보내면 에러 없이
+결과만 망가지므로, 앱은 생성 전에 막고 경고를 띄운다.
+
+#### Anima 권장값
+
+`anima`를 고를 때 터보 LoRA를 쓰면 **steps 8 / cfg 1.0**, 쓰지 않으면
+**steps 30 / cfg 4.0**이 권장값이다. 앱은 이 값을 자동으로 바꾸지 않으므로
+메인 창에서 직접 맞춘다 — 사용자가 정한 값을 앱이 말없이 덮어쓰면 왜
+바뀌었는지 알 수 없기 때문이다.
+
+#### 사용자 워크플로
+
+옵션 → 로컬 생성의 **사용자 워크플로 폴더**에 자신의 템플릿(`*.json`)을 넣으면
+내장과 함께 목록에 나타난다. 템플릿은 매니페스트 + ComfyUI API 형식 그래프로
+이루어진다:
+
+```json
+{
+  "id": "my_workflow",
+  "name": "내 워크플로",
+  "output_node": "9",
+  "slots": {"positive": "6.text", "negative": "7.text", "seed": "3.seed"},
+  "model_slots": {
+    "checkpoint": {"path": "4.ckpt_name", "from": "CheckpointLoaderSimple.ckpt_name"}
+  },
+  "graph": { ... }
+}
+```
+
+- `slots` — 앱이 값을 넣는 자리 `<노드>.<입력명>`. 백엔드가 아는 키
+  (`positive`, `negative`, `seed`, `steps`, `cfg`, `sampler`, `scheduler`,
+  `width`, `height`)만 채워진다.
+- `model_slots` — 모델 파일을 넣는 자리. `path`는 그래프 안 위치,
+  `from`은 서버 `/object_info` 조회 경로 (콤보 항목의 원천).
+- `graph` — ComfyUI **API 형식** 노드 그래프 (`{"3": {"class_type": ..., "inputs": ...}}`).
+
+전체 형식은 `docs/superpowers/specs/2026-09-06-comfyui-backend-design.md` (스펙 §3.2)를
+참고한다. 깨진 JSON은 그 파일만 건너뛰고 나머지는 정상 동작한다.
 
 ---
 
