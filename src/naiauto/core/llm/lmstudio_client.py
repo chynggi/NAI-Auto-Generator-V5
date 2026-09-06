@@ -23,6 +23,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .parsing import PromptResult, parse_prompt_result
+from .prompt_config import (
+    DEFAULT_ASSISTANT_INSTRUCTION,
+    DEFAULT_COMMON_RULES,
+    DEFAULT_LENGTH_HINTS,
+    DEFAULT_STYLE_DANBOORU,
+    DEFAULT_STYLE_NATURAL,
+    PromptConfig,
+    default_prompt_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +58,9 @@ __all__ = [
     "LMStudioResponseError",
     "LMStudioTimeoutError",
     "LMStudioVisionUnsupported",
+    "PromptConfig",
     "PromptResult",
+    "default_prompt_config",
     "runtime_error",
     "system_prompt_for_style",
 ]
@@ -84,21 +95,8 @@ _SAFETY_MAX_TOKENS = 2048
 
 #: 길이 → 시스템 프롬프트에 덧붙이는 **분량 지시**. 토큰으로 자르지 않고 모델이 스스로
 #: 분량을 맞추게 한다 (자르면 문장이 중간에 끊기고, 추론 모델은 사고 중에 잘려 답이 안 나온다).
-#: 대략적인 글자 수를 알려 주되 "완결된 하나"를 강조한다. "중간"도 지시를 준다.
-_LENGTH_HINT = {
-    LENGTH_SHORT: (
-        "Length: keep it short and concise — roughly 200 characters or fewer, only the most "
-        "important elements. Still finish as one complete, self-contained prompt."
-    ),
-    LENGTH_MEDIUM: (
-        "Length: keep it moderate — roughly 200 to 500 characters, covering the key elements "
-        "without going overboard. Finish as one complete prompt."
-    ),
-    LENGTH_LONG: (
-        "Length: be thorough and detailed — you may use up to roughly 1000 characters, covering "
-        "subject, appearance, action, composition, setting, lighting and mood."
-    ),
-}
+#: 문안은 `prompt_config`가 소유한다 — 사용자가 JSON으로 바꿀 수 있는 항목이기 때문이다.
+_LENGTH_HINT = dict(DEFAULT_LENGTH_HINTS)
 
 
 def max_tokens_for_length(length: str) -> int:
@@ -108,35 +106,18 @@ def max_tokens_for_length(length: str) -> int:
     return _SAFETY_MAX_TOKENS
 
 
+# 아래 문안의 **출처는 `prompt_config`**다 (사용자가 JSON 파일로 항목별로 바꿀 수 있는
+# 그 값이다). 여기 상수들은 "파일을 쓰지 않을 때의 완성본"으로, 예전부터 이 이름을 쓰던
+# 코드·테스트를 위해 남긴다 — 문안을 두 곳에 적지 않도록 조립만 한다.
+
 #: 두 스타일 공통 출력 규약 (JSON만, 설명·코드펜스 금지).
-_COMMON_RULES = (
-    'Respond ONLY with a JSON object of the form {"prompt": "...", "negative_prompt": "..."} '
-    'and nothing else. Put the main description in "prompt". Use "negative_prompt" only for '
-    "things to avoid (leave it an empty string if you have no suggestions). Do not add "
-    "explanations, headings, or code fences. "
-    "When an image is provided, base the prompt on what you actually see in it; when text is also "
-    "provided, treat that text as the user's intent and let it steer the result."
-)
+_COMMON_RULES = DEFAULT_COMMON_RULES
 
 #: 자연어 스타일 시스템 프롬프트 — 태그 나열을 금지하고 서술형 문장을 강제한다.
-SYSTEM_PROMPT_NATURAL = (
-    "You are an assistant that writes image-generation prompts for NovelAI Diffusion V5. "
-    "V5 has a strong natural-language text encoder, so write the prompt as vivid, flowing "
-    "natural-language sentences that describe the subject, appearance, action, composition, "
-    "setting, lighting and mood. "
-    "Do NOT output comma-separated Danbooru tags (e.g. do not write things like "
-    "'1girl, solo, long hair'); write real descriptive prose instead. " + _COMMON_RULES
-)
+SYSTEM_PROMPT_NATURAL = f"{DEFAULT_STYLE_NATURAL} {_COMMON_RULES}"
 
 #: 단부루 스타일 시스템 프롬프트 — 쉼표 구분 태그만 허용하고 문장을 금지한다.
-SYSTEM_PROMPT_DANBOORU = (
-    "You are an assistant that writes image-generation prompts as Danbooru-style tags. "
-    "Output ONLY lowercase, comma-separated Danbooru tags (e.g. '1girl, solo, long hair, "
-    "school uniform, classroom, sitting, looking at viewer'). "
-    "Use tags for subject count, appearance, clothing, pose, expression, setting and style. "
-    "Do NOT write natural-language sentences and do not add articles or punctuation other than "
-    "the commas separating tags. " + _COMMON_RULES
-)
+SYSTEM_PROMPT_DANBOORU = f"{DEFAULT_STYLE_DANBOORU} {_COMMON_RULES}"
 
 #: 스타일 → 시스템 프롬프트.
 _STYLE_SYSTEM_PROMPTS = {
@@ -146,14 +127,7 @@ _STYLE_SYSTEM_PROMPTS = {
 
 #: 어시스턴트 모드 지시 — 스타일 기본 프롬프트 뒤에 덧붙는다. 스타일(문장/태그) 규약은
 #: 그대로 유지하면서, "본 대로"가 아니라 "지시대로 변형해서" 프롬프트를 쓰게 한다.
-ASSISTANT_INSTRUCTION = (
-    "IMPORTANT — assistant/transform mode: an image is provided together with a text "
-    "instruction. Do not simply describe the image as-is. Apply the changes the instruction "
-    "asks for (for example replacing an outfit, changing the pose or camera angle, swapping the "
-    "background or time of day) and write the prompt for the RESULTING, modified image. Keep "
-    "everything the instruction does not mention faithful to the original image. Follow the "
-    "output style stated above (natural-language sentences or Danbooru tags)."
-)
+ASSISTANT_INSTRUCTION = DEFAULT_ASSISTANT_INSTRUCTION
 
 #: 하위 호환: 예전 코드/설정이 참조하던 이름. 기본은 자연어 스타일이다.
 DEFAULT_SYSTEM_PROMPT = SYSTEM_PROMPT_NATURAL
@@ -213,19 +187,23 @@ class LMStudioConfig:
     length: str = LENGTH_MEDIUM  # 출력 길이 (LENGTH_SHORT | LENGTH_MEDIUM | LENGTH_LONG)
     assistant: bool = False  # True = 어시스턴트(이미지+지시 변형) 모드
     system_prompt: str = ""  # "" = 스타일 기본 프롬프트. 값이 있으면 그 스타일 프롬프트 뒤에 덧붙는다
+    #: 항목별 지시문 한 벌. None이면 내장 기본 문안을 쓴다. 사용자가 옵션에서 JSON 파일을
+    #: 지정하면 UI가 `prompt_config.load_prompt_config_or_default`로 읽어 여기에 담아 넘긴다.
+    prompts: PromptConfig | None = None
+
+    def prompt_config(self) -> PromptConfig:
+        """이 생성에 쓸 지시문 한 벌 (지정이 없으면 내장 기본값)."""
+        return self.prompts or default_prompt_config()
 
     def effective_system_prompt(self) -> str:
         """스타일 기본 프롬프트 (+ 어시스턴트 지시 + 길이 지시) + (있으면) 사용자 추가 지시.
 
         예전 동작(오버라이드 = 전면 교체)과 달리, 스타일 규약이 항상 유지되도록
         기본 프롬프트 **뒤에** 붙인다. 어시스턴트 모드면 변형 지시를, 길이 지시(짧게/중간/
-        길게 각각 대략적 글자 수)를 더한다 — 길이 제어의 주된 수단이다."""
-        base = system_prompt_for_style(self.style)
-        if self.assistant:
-            base = f"{base}\n\n{ASSISTANT_INSTRUCTION}"
-        length_hint = _LENGTH_HINT.get(self.length, "")
-        if length_hint:
-            base = f"{base}\n\n{length_hint}"
+        길게 각각 대략적 글자 수)를 더한다 — 길이 제어의 주된 수단이다.
+
+        각 조각의 문안은 `prompts`(사용자가 JSON으로 바꿀 수 있는 항목들)에서 온다."""
+        base = self.prompt_config().system_prompt(self.style, assistant=self.assistant, length=self.length)
         extra = self.system_prompt.strip()
         return f"{base}\n\n{extra}" if extra else base
 
@@ -341,7 +319,9 @@ class LMStudioPromptGenerator:
             model = self._resolve_model(client, config.model)
             chat = lms.Chat(config.effective_system_prompt())
             images = self._prepare_images(lms, image)
-            message = self._user_message(text, image is not None, config.style, config.assistant)
+            message = self._user_message(
+                text, image is not None, config.style, config.assistant, config.prompts
+            )
             chat.add_user_message(message, images=images)
             raw = self._stream_response(lms, model, chat, cancelled, config.max_tokens())
         except LMStudioError:
@@ -429,25 +409,32 @@ class LMStudioPromptGenerator:
             raise LMStudioResponseError(f"could not prepare image: {e}") from e
 
     @staticmethod
-    def _user_message(text: str, has_image: bool, style: str = STYLE_NATURAL, assistant: bool = False) -> str:
+    def _user_message(
+        text: str,
+        has_image: bool,
+        style: str = STYLE_NATURAL,
+        assistant: bool = False,
+        prompts: PromptConfig | None = None,
+    ) -> str:
         """스타일을 사용자 메시지에서도 한 번 더 못박는다 (시스템 프롬프트를 소홀히 하는
         모델 대비). 자연어면 '문장으로', 단부루면 '태그로'를 명시한다.
 
-        어시스턴트 모드는 텍스트를 '이미지에 적용할 변형 지시'로 다룬다."""
+        어시스턴트 모드는 텍스트를 '이미지에 적용할 변형 지시'로 다룬다.
+
+        문안(`{kind}`/`{text}` 자리를 가진 틀)은 `prompts.user_messages`에서 온다 —
+        사용자가 JSON으로 항목별로 바꿀 수 있다."""
         text = (text or "").strip()
-        kind = "Danbooru tags" if style == STYLE_DANBOORU else "a natural-language description"
-        if assistant:
-            if has_image and text:
-                return f"Apply this change to the image and write {kind} for the modified image: {text}"
-            if has_image:
-                return f"Write {kind} for a NovelAI prompt based on this image."
-            # 이미지 없이 지시만 — 어시스턴트가 변형할 대상이 없으니 지시대로 새로 쓴다.
-            return f"Write {kind} for a NovelAI prompt for: {text}"
-        if has_image and not text:
-            return f"Write {kind} for a NovelAI prompt based on this image."
-        if has_image:
-            return f"Using this image and the following intent, write {kind} for a NovelAI prompt: {text}"
-        return f"Write {kind} for a NovelAI prompt for: {text}"
+        config = prompts or default_prompt_config()
+        kind = config.style(style).output_kind
+        prefix = "assistant_" if assistant else ""
+        if has_image and text:
+            key = f"{prefix}image_with_text"
+        elif has_image:
+            key = f"{prefix}image_only"
+        else:
+            # 이미지 없이 지시만 — 어시스턴트도 변형할 대상이 없으니 지시대로 새로 쓴다.
+            key = f"{prefix}text_only"
+        return config.user_message(key, kind=kind, text=text)
 
     @staticmethod
     def _map_generation_error(exc: Exception, *, has_image: bool) -> LMStudioError:

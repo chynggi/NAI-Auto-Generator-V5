@@ -441,7 +441,21 @@
       "llm_connect_ok": "{} の LM Studio サーバーに接続しました。",
       "llm_connect_failed": "{} に接続できませんでした。LM Studio アプリを起動しサーバーを開始しているか、アドレスが正しいか確認してください。",
       "llm_models_found": "ロード済みモデルを {} 個見つけました。",
-      "llm_no_models": "ロード済みのモデルがありません。まず LM Studio でモデルをロードしてください。"
+      "llm_no_models": "ロード済みのモデルがありません。まず LM Studio でモデルをロードしてください。",
+      "err_file_missing": "ファイルが見つかりません。",
+      "llm_prompt_config_section": "プロンプトセット (JSON ファイル)",
+      "llm_prompt_config_hint": "LLM に送る指示文を項目別 (スタイル・アシスタント・長さ・ユーザーメッセージ) にまとめた JSON ファイルです。空欄なら内蔵の既定文を使います。`既定ファイルを作成` で現在の値をそのまま書き出し、エディタで編集してください。書かれた項目だけが既定値の上に反映されます。",
+      "llm_prompt_config_create": "既定ファイルを作成",
+      "llm_prompt_config_open": "エディタで開く",
+      "llm_prompt_config_filter": "プロンプトセット (*.json);;すべてのファイル (*)",
+      "llm_prompt_config_ok": "プロンプトセットを読み込みました: {}",
+      "llm_prompt_config_none": "ファイルがないため内蔵の既定文を使います ({} に作成できます)。",
+      "llm_prompt_config_missing": "ファイルが見つかりません: {}。内蔵の既定文を使います。",
+      "llm_prompt_config_error": "プロンプトセットを読み込めませんでした: {} — 内蔵の既定文を使います。",
+      "llm_prompt_config_created": "既定ファイルを作成しました: {}",
+      "llm_prompt_config_exists": "すでにファイルがあるため上書きしませんでした: {}",
+      "llm_prompt_config_open_failed": "ファイルを開けませんでした: {}",
+      "llm_prompt_config": "プロンプトセットのファイル"
     },
     "resolution": {
       "title": "解像度",

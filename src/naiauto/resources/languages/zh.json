@@ -441,7 +441,21 @@
       "llm_connect_ok": "已连接到 {} 的 LM Studio 服务器。",
       "llm_connect_failed": "无法连接到 {}。请确认 LM Studio 应用已打开并启动了服务器，且地址正确。",
       "llm_models_found": "找到 {} 个已加载的模型。",
-      "llm_no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。"
+      "llm_no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。",
+      "err_file_missing": "找不到该文件。",
+      "llm_prompt_config_section": "提示词集 (JSON 文件)",
+      "llm_prompt_config_hint": "一个 JSON 文件，按条目（风格、助手、长度、用户消息）保存发送给 LLM 的指令。留空则使用内置文案。点击 `创建默认文件` 可把当前值写入文件，然后用任意文本编辑器修改；只有文件中保留的条目会覆盖默认值。",
+      "llm_prompt_config_create": "创建默认文件",
+      "llm_prompt_config_open": "用编辑器打开",
+      "llm_prompt_config_filter": "提示词集 (*.json);;所有文件 (*)",
+      "llm_prompt_config_ok": "已载入提示词集：{}",
+      "llm_prompt_config_none": "没有文件，使用内置文案（可在 {} 创建）。",
+      "llm_prompt_config_missing": "找不到文件：{}。使用内置文案。",
+      "llm_prompt_config_error": "无法读取提示词集：{} — 使用内置文案。",
+      "llm_prompt_config_created": "已创建默认文件：{}",
+      "llm_prompt_config_exists": "文件已存在，未覆盖：{}",
+      "llm_prompt_config_open_failed": "无法打开文件：{}",
+      "llm_prompt_config": "提示词集文件"
     },
     "resolution": {
       "title": "分辨率",

@@ -441,7 +441,21 @@
       "llm_connect_ok": "{} 에 LM Studio 서버가 연결되었습니다.",
       "llm_connect_failed": "{} 에 연결하지 못했습니다. LM Studio 앱을 켜고 서버를 시작했는지, 주소가 맞는지 확인하세요.",
       "llm_models_found": "로드된 모델 {}개를 찾았습니다.",
-      "llm_no_models": "로드된 모델이 없습니다. LM Studio에서 모델을 먼저 로드하세요."
+      "llm_no_models": "로드된 모델이 없습니다. LM Studio에서 모델을 먼저 로드하세요.",
+      "err_file_missing": "파일을 찾을 수 없습니다.",
+      "llm_prompt_config_section": "프롬프트 세트 (JSON 파일)",
+      "llm_prompt_config_hint": "LLM에 보내는 지시문을 항목별(스타일·어시스턴트·길이·사용자 메시지)로 담은 JSON 파일입니다. 비워 두면 앱에 내장된 기본 문안을 씁니다. `기본 파일 만들기`로 지금 값이 그대로 든 파일을 만든 뒤 편집기로 고치면 되고, 적어 둔 항목만 기본값 위에 덮입니다.",
+      "llm_prompt_config_create": "기본 파일 만들기",
+      "llm_prompt_config_open": "편집기로 열기",
+      "llm_prompt_config_filter": "프롬프트 세트 (*.json);;모든 파일 (*)",
+      "llm_prompt_config_ok": "프롬프트 세트를 읽었습니다: {}",
+      "llm_prompt_config_none": "파일이 없어 내장 기본 문안을 씁니다 ({} 에 만들 수 있습니다).",
+      "llm_prompt_config_missing": "파일을 찾을 수 없습니다: {}. 내장 기본 문안을 씁니다.",
+      "llm_prompt_config_error": "프롬프트 세트를 읽지 못했습니다: {} — 내장 기본 문안을 씁니다.",
+      "llm_prompt_config_created": "기본 파일을 만들었습니다: {}",
+      "llm_prompt_config_exists": "이미 파일이 있어 덮어쓰지 않았습니다: {}",
+      "llm_prompt_config_open_failed": "파일을 열지 못했습니다: {}",
+      "llm_prompt_config": "프롬프트 세트 파일"
     },
     "resolution": {
       "title": "해상도",

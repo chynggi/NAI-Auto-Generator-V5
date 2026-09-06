@@ -703,15 +703,27 @@ class MainWindow(QMainWindow):
             )
             return
 
+        from ..core.llm.prompt_config import load_prompt_config_or_default
         from .assistant_dialog import AssistantDialog
 
         cfg = self._settings.lmstudio
+        # 항목별 지시문 세트 (옵션 → LLM에서 지정한 JSON). 읽지 못하면 내장 기본 문안으로
+        # 계속 가되, 왜 안 먹었는지는 알려 준다 — 조용히 무시하면 편집한 파일이 반영되지
+        # 않는 이유를 사용자가 알 길이 없다.
+        prompts, prompt_error = load_prompt_config_or_default(cfg.prompt_config_path)
+        if prompt_error:
+            QMessageBox.warning(
+                self,
+                tr("menu.prompt_assistant"),
+                tr("options.llm_prompt_config_error", prompt_error),
+            )
         config = LMStudioConfig(
             host=cfg.host,
             model=cfg.model,
             timeout=cfg.timeout_seconds,
             style=cfg.default_style,
             system_prompt=cfg.system_prompt,
+            prompts=prompts,
         )
         factory, reason = self._wd_tagger_factory()
         dialog = AssistantDialog(
