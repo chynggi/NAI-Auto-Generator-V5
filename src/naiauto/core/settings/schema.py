@@ -17,7 +17,7 @@ APP_NAME = "NAI-Auto-V5"
 #: 조용히 무시된다 — 반드시 QCoreApplication.setOrganizationName()으로 지정해야 한다.
 ORG_NAME = "sagawa8b"
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 DEFAULT_WORD_LIMIT = 20
 CUSTOM_RESOLUTION_SLOTS = 6
 QUICK_COUNT_SLOTS = 4
@@ -220,6 +220,10 @@ class LMStudioSettings(BaseModel):
     #: 출력 길이 기본값. "short" | "medium" | "long".
     #: LLM은 max_tokens+프롬프트 지시로, WD 태거는 일반 태그 임계값으로 번역된다.
     default_length: str = "medium"
+    #: LLM에 보내는 지시문을 항목별로 담은 JSON 파일 경로 (사용자가 외부 편집기로 고친다).
+    #: 빈 문자열이면 앱 데이터 폴더의 `llm_prompts.json`을 찾고, 그것도 없으면 내장 기본 문안.
+    #: 형식은 `core/llm/prompt_config.py` 참고 — 적어 둔 항목만 기본값 위에 덮인다.
+    prompt_config_path: str = ""
 
 
 class ComfyUISettings(BaseModel):

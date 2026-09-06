@@ -1,18 +1,27 @@
 """LLM Options_Page (KEY=`"llm"`) — 자연어 프롬프트 생성용 LM Studio 연결 설정.
 
-Host / 모델 / 타임아웃 / 시스템 프롬프트 / 기본 반영 방식을 다룬다. "연결 테스트"와
-"모델 새로고침"은 지금 켜져 있는 LM Studio 서버에 실제로 붙어 본다 — 저장 전에도
-사용자가 설정이 맞는지 바로 확인할 수 있게. 무거운 `lmstudio` import는 버튼을 눌렀을
-때만 일어난다 (`core.llm.runtime_error` 참고).
+Host / 타임아웃 / 시스템 프롬프트 / 기본 반영 방식 / **프롬프트 세트 파일**을 다룬다.
+"연결 테스트"는 지금 켜져 있는 LM Studio 서버에 실제로 붙어 본다 — 저장 전에도 사용자가
+설정이 맞는지 바로 확인할 수 있게. 무거운 `lmstudio` import는 버튼을 눌렀을 때만 일어난다
+(`core.llm.runtime_error` 참고).
+
+프롬프트 세트는 LLM에 보내는 지시문을 **항목별로** 담은 JSON 파일이다 (형식은
+`core/llm/prompt_config.py`). 여기서는 경로를 고르고, 기본값이 든 파일을 만들어 주고,
+편집기로 열어 주고, 지금 그 파일이 읽히는지 즉시 확인해 준다 — 실제 적용은
+프롬프트 어시스턴트 창이 열릴 때 일어난다.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -26,6 +35,12 @@ from PySide6.QtWidgets import (
 
 from ...core.i18n.manager import I18nManager
 from ...core.llm.lmstudio_client import DEFAULT_HOST
+from ...core.llm.prompt_config import (
+    PromptConfigError,
+    default_prompt_config_path,
+    load_prompt_config,
+    write_prompt_config,
+)
 from ...core.settings.schema import AppSettings
 from . import OptionsPage, register_page
 
@@ -125,6 +140,41 @@ class LLMPage(OptionsPage):
         self.system_edit.setFixedHeight(110)
         root.addWidget(self.system_edit)
 
+        # 프롬프트 세트 (항목별 지시문 JSON) — 외부 편집기로 고치는 파일
+        self.prompt_section_label = QLabel(self)
+        self.prompt_section_label.setStyleSheet("font-weight: bold;")
+        root.addWidget(self.prompt_section_label)
+
+        self.prompt_hint_label = QLabel(self)
+        self.prompt_hint_label.setWordWrap(True)
+        self.prompt_hint_label.setStyleSheet("color: palette(mid);")
+        root.addWidget(self.prompt_hint_label)
+
+        prompt_row = QHBoxLayout()
+        self.prompt_path_edit = QLineEdit(self)
+        self.prompt_path_edit.setPlaceholderText(str(default_prompt_config_path()))
+        # 경로를 다 적고 포커스를 옮기면 그 자리에서 읽어 본다 (저장 전에 오타를 잡는다).
+        self.prompt_path_edit.editingFinished.connect(self._refresh_prompt_status)
+        self.prompt_browse_button = QPushButton(self)
+        self.prompt_browse_button.clicked.connect(self._browse_prompt_config)
+        prompt_row.addWidget(self.prompt_path_edit, 1)
+        prompt_row.addWidget(self.prompt_browse_button)
+        root.addLayout(prompt_row)
+
+        prompt_btn_row = QHBoxLayout()
+        self.prompt_create_button = QPushButton(self)
+        self.prompt_create_button.clicked.connect(self._create_prompt_config)
+        self.prompt_open_button = QPushButton(self)
+        self.prompt_open_button.clicked.connect(self._open_prompt_config)
+        prompt_btn_row.addWidget(self.prompt_create_button)
+        prompt_btn_row.addWidget(self.prompt_open_button)
+        prompt_btn_row.addStretch(1)
+        root.addLayout(prompt_btn_row)
+
+        self.prompt_status_label = QLabel(self)
+        self.prompt_status_label.setWordWrap(True)
+        root.addWidget(self.prompt_status_label)
+
         root.addStretch(1)
         self.retranslate()
 
@@ -143,7 +193,9 @@ class LLMPage(OptionsPage):
             self.replace_radio.setChecked(True)
         else:
             self.append_radio.setChecked(True)
+        self.prompt_path_edit.setText(cfg.prompt_config_path)
         self.status_label.setText("")
+        self._refresh_prompt_status()
 
     def commit(self, draft: AppSettings) -> None:
         cfg = draft.lmstudio
@@ -153,6 +205,8 @@ class LLMPage(OptionsPage):
         cfg.system_prompt = self.system_edit.toPlainText().strip()
         cfg.default_style = "danbooru" if self.danbooru_radio.isChecked() else "natural"
         cfg.default_apply_mode = "replace" if self.replace_radio.isChecked() else "append"
+        # 빈 값은 "내장 기본 문안"이라는 뜻이라 그대로 둔다 (기본 경로로 채우지 않는다).
+        cfg.prompt_config_path = self.prompt_path_edit.text().strip()
 
     def retranslate(self) -> None:
         tr = self._i18n.get_text
@@ -168,6 +222,12 @@ class LLMPage(OptionsPage):
         self.replace_radio.setText(tr("options.llm_apply_replace"))
         self.system_label.setText(tr("options.llm_system_prompt"))
         self.system_edit.setPlaceholderText(tr("options.llm_system_prompt_hint"))
+        self.prompt_section_label.setText(tr("options.llm_prompt_config_section"))
+        self.prompt_hint_label.setText(tr("options.llm_prompt_config_hint"))
+        self.prompt_browse_button.setText(tr("options.browse"))
+        self.prompt_create_button.setText(tr("options.llm_prompt_config_create"))
+        self.prompt_open_button.setText(tr("options.llm_prompt_config_open"))
+        self._refresh_prompt_status()
 
     # ── 내부: 실서버 확인 ────────────────────────────────────────────────
 
@@ -193,3 +253,65 @@ class LLMPage(OptionsPage):
             self.status_label.setText(tr("options.llm_connect_ok", self._host()))
         else:
             self.status_label.setText(tr("options.llm_connect_failed", self._host()))
+
+    # ── 내부: 프롬프트 세트 파일 ─────────────────────────────────────────
+
+    def _prompt_path(self) -> Path:
+        """지금 칸에 적힌 경로. 비어 있으면 기본 위치(앱 데이터 폴더)."""
+        text = self.prompt_path_edit.text().strip()
+        return Path(text) if text else default_prompt_config_path()
+
+    def _refresh_prompt_status(self) -> None:
+        """지금 경로의 파일을 실제로 읽어 보고 결과를 문구로 알린다 (저장과 무관)."""
+        tr = self._i18n.get_text
+        target = self._prompt_path()
+        if not target.exists():
+            explicit = bool(self.prompt_path_edit.text().strip())
+            key = "options.llm_prompt_config_missing" if explicit else "options.llm_prompt_config_none"
+            self.prompt_status_label.setText(tr(key, str(target)))
+            return
+        try:
+            config = load_prompt_config(target)
+        except PromptConfigError as e:
+            self.prompt_status_label.setText(tr("options.llm_prompt_config_error", str(e)))
+            return
+        self.prompt_status_label.setText(tr("options.llm_prompt_config_ok", config.name or target.name))
+
+    def _browse_prompt_config(self) -> None:
+        tr = self._i18n.get_text
+        start = self._prompt_path()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("options.choose_file", tr("options.llm_prompt_config_section")),
+            str(start.parent if start.parent.exists() else Path.home()),
+            tr("options.llm_prompt_config_filter"),
+        )
+        if path:
+            self.prompt_path_edit.setText(path)
+            self._refresh_prompt_status()
+
+    def _create_prompt_config(self) -> None:
+        """기본 문안이 든 편집용 파일을 만든다. 이미 있으면 덮어쓰지 않는다."""
+        tr = self._i18n.get_text
+        target = self._prompt_path()
+        if target.exists():
+            self.prompt_status_label.setText(tr("options.llm_prompt_config_exists", str(target)))
+            self.prompt_path_edit.setText(str(target))
+            return
+        try:
+            written = write_prompt_config(target)
+        except PromptConfigError as e:
+            self.prompt_status_label.setText(tr("options.llm_prompt_config_error", str(e)))
+            return
+        self.prompt_path_edit.setText(str(written))
+        self.prompt_status_label.setText(tr("options.llm_prompt_config_created", str(written)))
+
+    def _open_prompt_config(self) -> None:
+        """OS 기본 편집기로 파일을 연다 (JSON은 보통 메모장/에디터가 받는다)."""
+        tr = self._i18n.get_text
+        target = self._prompt_path()
+        if not target.is_file():
+            self.prompt_status_label.setText(tr("options.llm_prompt_config_missing", str(target)))
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
+            self.prompt_status_label.setText(tr("options.llm_prompt_config_open_failed", str(target)))

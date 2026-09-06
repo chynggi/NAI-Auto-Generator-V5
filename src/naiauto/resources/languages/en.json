@@ -543,7 +543,21 @@
       "local_backend_models_section": "Models",
       "local_backend_model_none": "(None)",
       "local_backend_no_options": "Run the connection test first",
-      "local_backend_timeout": "Timeout (seconds)"
+      "local_backend_timeout": "Timeout (seconds)",
+      "err_file_missing": "The file could not be found.",
+      "llm_prompt_config_section": "Prompt set (JSON file)",
+      "llm_prompt_config_hint": "A JSON file holding the instructions sent to the LLM, split per item (style, assistant, length, user messages). Leave it blank to use the built-in wording. Use `Create default file` to write the current values out, then edit it in any text editor — only the items you keep are applied on top of the defaults.",
+      "llm_prompt_config_create": "Create default file",
+      "llm_prompt_config_open": "Open in editor",
+      "llm_prompt_config_filter": "Prompt set (*.json);;All files (*)",
+      "llm_prompt_config_ok": "Prompt set loaded: {}",
+      "llm_prompt_config_none": "No file, so the built-in wording is used (you can create one at {}).",
+      "llm_prompt_config_missing": "File not found: {}. The built-in wording is used.",
+      "llm_prompt_config_error": "Could not read the prompt set: {} — the built-in wording is used.",
+      "llm_prompt_config_created": "Created the default file: {}",
+      "llm_prompt_config_exists": "A file is already there and was not overwritten: {}",
+      "llm_prompt_config_open_failed": "Could not open the file: {}",
+      "llm_prompt_config": "Prompt set file"
     },
     "resolution": {
       "title": "Resolution",

@@ -12,6 +12,7 @@ UI 쪽에 필드→페이지 매핑을 따로 유지하지 않아도 된다.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..metadata.save import has_known_token
 from ..resolution_catalog import DIMENSION_STEP, MAX_DIMENSION, MIN_DIMENSION, is_valid_dimension
@@ -78,11 +79,20 @@ def validate_options(settings: AppSettings) -> tuple[OptionIssue, ...]:
 
 
 def _validate_llm(settings: AppSettings) -> list[OptionIssue]:
-    """LM Studio 응답 타임아웃 범위만 검사한다 (host/model은 실행 시점에 연결로 확인)."""
+    """응답 타임아웃 범위와 프롬프트 세트 파일의 존재만 본다.
+
+    host/model은 실행 시점에 연결로 확인한다. 프롬프트 세트는 **경로를 적어 둔 경우에만**
+    검사한다 (빈 값은 "내장 기본 문안"이라는 정상 상태다). 내용 검증은 옵션 페이지가
+    실제로 읽어 보며 하고, 여기서는 저장 시점에 오타 난 경로를 잡아 준다.
+    """
+    issues: list[OptionIssue] = []
     low, high = LLM_TIMEOUT_RANGE
     if not low <= settings.lmstudio.timeout_seconds <= high:
-        return [OptionIssue(PAGE_LLM, "options.llm_timeout", "options.err_range", (low, high))]
-    return []
+        issues.append(OptionIssue(PAGE_LLM, "options.llm_timeout", "options.err_range", (low, high)))
+    path = settings.lmstudio.prompt_config_path.strip()
+    if path and not Path(path).is_file():
+        issues.append(OptionIssue(PAGE_LLM, "options.llm_prompt_config", "options.err_file_missing"))
+    return issues
 
 
 def _validate_filename(settings: AppSettings) -> list[OptionIssue]:

@@ -431,10 +431,6 @@ class MainWindow(QMainWindow):
         self.accounts_action = self.file_menu.addAction("")
         self.accounts_action.setShortcut("Ctrl+Shift+I")
         self.accounts_action.triggered.connect(self._on_open_accounts)
-        self.file_menu.addSeparator()
-        self.image_info_action = self.file_menu.addAction("")
-        self.image_info_action.triggered.connect(self._on_open_image_info)
-
         # 설정 파일 저장/불러오기 (V4의 Ctrl+S). V4는 불러오기가 Ctrl+L이었지만
         # V5에서 Ctrl+L은 로그 보기라 Ctrl+O를 쓴다.
         self.file_menu.addSeparator()
@@ -496,8 +492,13 @@ class MainWindow(QMainWindow):
         self.gallery_action.setShortcut("F3")
         self.gallery_action.triggered.connect(self._on_open_gallery)
 
-        # 도구 — 로그 보기 (강제 종료처럼 재현이 어려운 문제를 사후에 확인)
+        # 도구 — 이미지 정보 / 로그 보기 (강제 종료처럼 재현이 어려운 문제를 사후에 확인)
         self.tools_menu = self.menuBar().addMenu("")
+        # 이미지에서 설정을 되가져오는 창. 파일 메뉴가 아니라 도구에 둔다.
+        self.image_info_action = self.tools_menu.addAction("")
+        self.image_info_action.triggered.connect(self._on_open_image_info)
+
+        self.tools_menu.addSeparator()
         self.log_action = self.tools_menu.addAction("")
         self.log_action.setShortcut("Ctrl+L")
         self.log_action.triggered.connect(self.open_logs)
@@ -746,15 +747,27 @@ class MainWindow(QMainWindow):
             )
             return
 
+        from ..core.llm.prompt_config import load_prompt_config_or_default
         from .assistant_dialog import AssistantDialog
 
         cfg = self._settings.lmstudio
+        # 항목별 지시문 세트 (옵션 → LLM에서 지정한 JSON). 읽지 못하면 내장 기본 문안으로
+        # 계속 가되, 왜 안 먹었는지는 알려 준다 — 조용히 무시하면 편집한 파일이 반영되지
+        # 않는 이유를 사용자가 알 길이 없다.
+        prompts, prompt_error = load_prompt_config_or_default(cfg.prompt_config_path)
+        if prompt_error:
+            QMessageBox.warning(
+                self,
+                tr("menu.prompt_assistant"),
+                tr("options.llm_prompt_config_error", prompt_error),
+            )
         config = LMStudioConfig(
             host=cfg.host,
             model=cfg.model,
             timeout=cfg.timeout_seconds,
             style=cfg.default_style,
             system_prompt=cfg.system_prompt,
+            prompts=prompts,
         )
         factory, reason = self._wd_tagger_factory()
         dialog = AssistantDialog(
