@@ -5,6 +5,7 @@ from naiauto.core.prompt.emitters import (
     POSITION_TAGS,
     _finalize,
     character_regions,
+    emit_couple_mask,
     emit_sequential,
     lora_tags,
     negative_prompt,
@@ -346,3 +347,125 @@ def test_sequential_lora_filename_underscores_survive():
 def test_sequential_returns_negative_too():
     _, negative = emit_sequential(compiled(negative="bad hands"), PRESET, {})
     assert negative == "lowres, worst quality, bad hands"
+
+
+# --- emit_couple_mask ------------------------------------------------------
+
+
+def test_couple_mask_two_characters_full_layout():
+    positive, negative = emit_couple_mask(
+        compiled(
+            scene_tags=("rain", "night"),
+            subjects=("girl", "girl"),
+            characters=(
+                char("c1", ["purple_hair"], hint="left", cx=0.30),
+                char("c2", ["silver_hair"], hint="right", cx=0.70),
+            ),
+        ),
+        PRESET,
+        {},
+        resolution=(832, 1216),
+    )
+    assert positive.splitlines() == [
+        "MASK_SIZE(832, 1216) masterpiece, best quality, 2girls, rain, night",
+        "COUPLE MASK(0 0.5, 0 1) purple hair",
+        "COUPLE MASK(0.5 1, 0 1) silver hair",
+    ]
+    assert negative == "lowres, worst quality"
+
+
+def test_couple_mask_omits_position_tags():
+    positive, _ = emit_couple_mask(
+        compiled(
+            characters=(
+                char("c1", ["a"], hint="left", cx=0.3),
+                char("c2", ["b"], hint="right", cx=0.7),
+            )
+        ),
+        PRESET,
+        {},
+        resolution=(832, 1216),
+    )
+    assert "on the left" not in positive
+    assert "on the right" not in positive
+
+
+def test_couple_mask_single_character_merges_into_global():
+    positive, _ = emit_couple_mask(
+        compiled(
+            scene_tags=("alley",),
+            subjects=("girl",),
+            characters=(char("c1", ["silver_hair"], hint="left", cx=0.30),),
+        ),
+        PRESET,
+        {},
+        resolution=(832, 1216),
+    )
+    assert "COUPLE" not in positive
+    assert "MASK_SIZE" not in positive
+    assert "silver hair" in positive
+
+
+def test_couple_mask_no_characters_is_single_line():
+    positive, _ = emit_couple_mask(
+        compiled(scene_tags=("alley", "night")), PRESET, {}, resolution=(832, 1216)
+    )
+    assert positive == "masterpiece, best quality, alley, night"
+
+
+def test_couple_mask_preset_mask_size_wins_over_resolution():
+    preset = TargetPreset(id="p", name="P", mask_size=(1024, 1024))
+    positive, _ = emit_couple_mask(
+        compiled(characters=(char("c1", ["a"], cx=0.3), char("c2", ["b"], cx=0.7))),
+        preset,
+        {},
+        resolution=(832, 1216),
+    )
+    assert positive.startswith("MASK_SIZE(1024, 1024) ")
+
+
+def test_couple_mask_without_resolution_omits_mask_size():
+    positive, _ = emit_couple_mask(
+        compiled(characters=(char("c1", ["a"], cx=0.3), char("c2", ["b"], cx=0.7))),
+        PRESET,
+        {},
+        resolution=None,
+    )
+    assert "MASK_SIZE" not in positive
+    assert positive.splitlines()[1].startswith("COUPLE MASK(0 0.5, 0 1) ")
+
+
+def test_couple_mask_lora_tag_global_trigger_in_couple_line():
+    entry = LoraEntry(id="kafka", file="kafka.safetensors", weight=0.8, triggers=("kafka",))
+    positive, _ = emit_couple_mask(
+        compiled(
+            characters=(char("c1", ["purple_hair"], cx=0.3), char("c2", ["black_hair"], cx=0.7))
+        ),
+        PRESET,
+        {"c1": entry},
+        resolution=(832, 1216),
+    )
+    lines = positive.splitlines()
+    assert lines[0].startswith("MASK_SIZE(832, 1216) <lora:kafka:0.8>, masterpiece")
+    assert lines[1] == "COUPLE MASK(0 0.5, 0 1) kafka, purple hair"
+
+
+def test_couple_mask_three_way_coordinates():
+    positive, _ = emit_couple_mask(
+        compiled(
+            characters=(
+                char("c1", ["a"], cx=0.15),
+                char("c2", ["b"], cx=0.5),
+                char("c3", ["c"], cx=0.85),
+            )
+        ),
+        PRESET,
+        {},
+        resolution=(1024, 1024),
+    )
+    masks = [line.split(")")[0] + ")" for line in positive.splitlines()[1:]]
+    assert masks == [
+        "COUPLE MASK(0 0.333, 0 1)",
+        "COUPLE MASK(0.333 0.667, 0 1)",
+        "COUPLE MASK(0.667 1, 0 1)",
+    ]

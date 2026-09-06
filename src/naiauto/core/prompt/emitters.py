@@ -32,6 +32,7 @@ __all__ = [
     "lora_tags",
     "negative_prompt",
     "emit_sequential",
+    "emit_couple_mask",
 ]
 
 #: position_hint의 수평 토큰 → 태그. "center"는 노이즈라 태그를 만들지 않는다.
@@ -264,3 +265,58 @@ def emit_sequential(
         tags.extend(_character_block(char, total, preset, loras, with_position=True))
     tags.extend(_trailing_tags(compiled, preset))
     return _finalize(tags, preset), negative_prompt(compiled, preset)
+
+
+def _coord(value: float) -> str:
+    """좌표를 프롬프트에 넣을 짧은 문자열로 (0.3333333 → "0.333", 1.0 → "1")."""
+    return f"{round(value, 3):g}"
+
+
+def emit_couple_mask(
+    compiled: CompiledPrompt,
+    preset: TargetPreset,
+    loras: Mapping[str, LoraEntry] | None = None,
+    *,
+    resolution: tuple[int, int] | None = None,
+) -> tuple[str, str]:
+    """``COUPLE MASK(...)`` 형식 (asagi4/comfyui-prompt-control).
+
+    글로벌 라인 + 캐릭터별 ``COUPLE`` 라인. 캐릭터가 2명 미만이면 영역 분할의
+    의미가 없으므로 ``COUPLE`` 라인도 ``MASK_SIZE``도 만들지 않고 캐릭터 태그를
+    글로벌 라인에 합친다.
+
+    위치 태그는 넣지 않는다 — 좌표가 이미 그 일을 하며 중복은 구도를 왜곡한다.
+    negative는 확장이 영역별 분할을 지원하지 않으므로 단일 문자열이다.
+    """
+    loras = loras or {}
+    negative = negative_prompt(compiled, preset)
+    regions = character_regions(compiled.characters)
+    total = len(compiled.characters)
+
+    global_tags = _global_tags(compiled, preset, loras)
+    if total < 2:
+        for char in compiled.characters:
+            global_tags.extend(
+                _character_block(char, total, preset, loras, with_position=False)
+            )
+    global_tags.extend(_trailing_tags(compiled, preset))
+    global_line = _finalize(global_tags, preset)
+
+    if total < 2:
+        return global_line, negative
+
+    size = preset.mask_size or resolution
+    if size is not None:
+        global_line = f"MASK_SIZE({size[0]}, {size[1]}) {global_line}"
+
+    lines = [global_line]
+    for region in regions:
+        block = _character_block(
+            region.character, total, preset, loras, with_position=False
+        )
+        mask = (
+            f"MASK({_coord(region.x)} {_coord(region.x + region.width)}, "
+            f"{_coord(region.y)} {_coord(region.y + region.height)})"
+        )
+        lines.append(f"COUPLE {mask} {_finalize(block, preset)}")
+    return "\n".join(lines), negative
