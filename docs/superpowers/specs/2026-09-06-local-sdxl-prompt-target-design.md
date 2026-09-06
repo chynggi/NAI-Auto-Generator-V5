@@ -32,15 +32,16 @@ B는 A의 출력물을 소비하는 쪽이라 A가 선행한다. A만으로도 "
 
 - **가중치 자동 부여**(`(tag:1.2)`). LLM이 강조도를 판단할 근거가 없다.
   프리셋에 `weight_syntax` 필드만 두고 실제 사용은 후속으로 미룬다.
-- **LoRA 트리거 단어 매핑.** LoRA를 실제로 적용하는 주체는 백엔드(B)다.
-  A에서 트리거 단어만 프롬프트에 박으면 LoRA 없이 생성될 때 오염만 남는다.
-- **`[prompt: x,y,w,h]` 형태의 어텐션 좌표 문자열 출력.** Attention Couple /
-  Latent Couple 계열은 확장마다 문법이 달라 특정 확장에 고착된다.
-  `regional_json`이 상위 호환이다.
+- **`AREA()` 출력.** `MASK()`와 합성 방식만 다르고 균등 분할 시나리오에선 이점이
+  없다. 필요해지면 프리셋 필드 하나로 전환 가능한 구조로 둔다.
 - **`BREAK` 구분자 출력.** A1111/Forge 문법이며 ComfyUI 기본 `CLIPTextEncode`는
-  인식하지 못한다(특정 커스텀 노드팩 필요). 필요해지면 emitter를 하나 더
-  추가하는 형태로 나중에 붙인다 — 구조가 이미 그것을 허용한다.
+  인식하지 못한다(특정 커스텀 노드팩 필요).
+- **A1111 `sd-webui-regional-prompter`(ADDCOL/ADDROW) emitter.** 비율 분할만
+  가능해 임의 박스 좌표를 못 쓴다. A1111/Forge 사용자는 `sequential`을 쓰면 되며,
+  Regional Prompter와 함께 쓰는 방법은 **문서(MANUAL_KR.md)로만 안내**한다.
 - **영역 박스 드래그 편집 UI.** 좌표는 `estimate_positions` 결과에서 자동 산출한다.
+- **LoRA 자동 키워드 매칭.** 캐릭터 태그에서 LoRA를 추측하면 오탐이 많다.
+  사용자가 다이얼로그에서 명시적으로 고른다.
 
 ## 2. 아키텍처
 
@@ -56,7 +57,8 @@ B는 A의 출력물을 소비하는 쪽이라 A가 선행한다. A만으로도 "
         ↓                                            ↓
   PromptFormatter                          emitters.emit_sequential
   base + neg + CharacterCaption[]          positive + negative (characters=())
-                                           emitters.emit_regional_json (선택 출력)
+                                           emitters.emit_couple_mask   (추가 출력)
+                                           emitters.emit_regional_json (추가 출력)
 ```
 
 ### 핵심 판단
@@ -66,9 +68,12 @@ B는 A의 출력물을 소비하는 쪽이라 A가 선행한다. A만으로도 "
    중립화하고 나머지는 그대로 둔다.
 2. **분기점은 `compiler._assemble`과 `merge` 두 곳뿐.**
 3. **emitter는 `CompiledPrompt`를 받는 순수 함수**다. 클래스가 필요 없고,
-   `regional_json`도 같은 자리에 놓인다. `PromptFormatter`를 상속하지 않는다 —
+   세 출력이 같은 자리에 놓인다. `PromptFormatter`를 상속하지 않는다 —
    그쪽은 캐릭터 분리를 전제로 짜여 있어 상속하면 두 책임이 엉킨다.
-4. **`CompiledPrompt`는 이미 "구조화 프롬프트" 그 자체**다(global scene +
+4. **어텐션 좌표 문법은 `asagi4/comfyui-prompt-control`로 고정한다** (§4.4 조사 근거).
+   텍스트 프롬프트 안에 좌표와 LoRA를 동시에 넣을 수 있는 유일한 선택지이고,
+   좌표계가 0..1 정규화라 우리 `regional_json`과 1:1로 대응한다.
+5. **`CompiledPrompt`는 이미 "구조화 프롬프트" 그 자체**다(global scene +
    characters[id/tags/center_x/center_y] + relationships). ComfyUI 영역 분할에
    필요한 정보를 전부 갖고 있으므로 내부 표현은 바꿀 필요가 없다.
    추가되는 필드는 `target: str` 하나뿐이다.
@@ -87,12 +92,16 @@ class TargetPreset:
     quality_suffix: tuple[str, ...] = ()
     default_negative: tuple[str, ...] = ()
     weight_syntax: str = "none"      # "none" | "a1111"  (A단계에선 미사용)
-    flatten: str = "sequential"      # 텍스트 emitter 선택자. A단계에선 "sequential"만
-                                     # 유효하다 (regional_json은 타깃과 무관하게 항상 제공).
+    flatten: str = "sequential"      # 기본 텍스트 emitter: "sequential" | "couple_mask"
     position_tags: bool = True
     natural_language: str = "drop"   # "drop" | "append"
     underscore_to_space: bool = True
+    mask_size: tuple[int, int] | None = None   # couple_mask의 MASK_SIZE(w, h).
+                                               # None이면 현재 생성 해상도를 쓴다.
 ```
+
+`flatten` 유효값: `"sequential"` | `"couple_mask"`. 프리셋의 기본 텍스트 emitter를
+정하지만, 다이얼로그에서 세 출력(§4)을 모두 볼 수 있으므로 **사용자를 가두지 않는다**.
 
 ### 3.2 JSON 형식
 
@@ -121,12 +130,52 @@ class TargetPreset:
 - `"novelai"`는 코드에 내장된 상수 프리셋(`kind="novelai"`)이며 JSON이 아니다.
   사용자 프리셋이 `id: "novelai"`를 선언해도 무시하고 경고 로그를 남긴다.
 
+### 3.4 LoRA 레지스트리 (`loras.json`)
+
+LLM은 사용자가 어떤 LoRA를 갖고 있는지 알 수 없다. **사용자 설정 레지스트리**를
+두고, 캐릭터별 적용은 다이얼로그에서 명시적으로 고른다 (자동 키워드 매칭은 배제).
+
+위치: `<target_presets_dir>/loras.json` (없으면 LoRA 기능 전체가 비활성).
+
+```json
+{
+  "kafka": {
+    "file": "kafka_illustrious.safetensors",
+    "weight": 0.8,
+    "triggers": ["kafka", "purple hair"]
+  }
+}
+```
+
+- `file` — 확장자 포함 파일명. `<lora:...>` 태그에는 **확장자를 뺀 stem**을 쓴다.
+- `weight` — 기본 가중치. 다이얼로그에서 컴파일마다 덮어쓸 수 있다.
+- `triggers` — 캐릭터 블록 맨 앞에 삽입할 트리거 단어. 빈 배열 허용.
+
+```python
+@dataclass(frozen=True)
+class LoraEntry:
+    id: str
+    file: str
+    weight: float = 1.0
+    triggers: tuple[str, ...] = ()
+```
+
+**배치 규칙** (A1111·ComfyUI 모두 `<lora:...>` 태그의 위치를 따지지 않는다):
+
+- `<lora:stem:weight>` 태그 → **글로벌 프롬프트 맨 앞**에 모은다
+- `triggers` → **해당 캐릭터 블록 맨 앞**에 넣는다
+- 같은 LoRA가 여러 캐릭터에 걸리면 **태그는 한 번만**, 트리거는 각 블록에
+
 ## 4. Emitter (`core/prompt/emitters.py`)
 
 ```python
-def emit_sequential(compiled: CompiledPrompt, preset: TargetPreset) -> tuple[str, str]
-def emit_regional_json(compiled: CompiledPrompt, preset: TargetPreset) -> dict
+def emit_sequential(compiled, preset, loras) -> tuple[str, str]   # (positive, negative)
+def emit_couple_mask(compiled, preset, loras) -> tuple[str, str]
+def emit_regional_json(compiled, preset, loras) -> dict
 ```
+
+`loras: Mapping[str, LoraEntry]`는 **캐릭터 id → LoRA** 매핑이다 (미지정 캐릭터는 없음).
+셋 다 `CompiledPrompt`만 읽는 순수 함수다.
 
 ### 4.1 `emit_sequential` — 조립 순서
 
@@ -169,7 +218,47 @@ strip → 빈값 제거 → 등장 순서 유지 중복 제거)을 하므로 그
 
 **빈 결과**: positive가 빈 문자열이면 기존 `CompilerEmptyResultError`를 던진다.
 
-### 4.2 `emit_regional_json` — 출력 형식
+### 4.2 `emit_couple_mask` — 어텐션 좌표 출력
+
+대상 확장: **`asagi4/comfyui-prompt-control`** (선정 근거는 §4.4).
+
+**문법** (2026-09-06 문서 기준):
+
+```
+MASK(x1 x2, y1 y2, weight, op)     # 기본값 MASK(0 1, 0 1, 1), op 기본 multiply
+COUPLE MASK(...)  ≡  COUPLE(...)   # 축약형
+MASK_SIZE(width, height)           # 기본 512x512 가정 오버라이드
+<lora:name:weight>                 # 인라인 LoRA
+```
+
+좌표는 **0..1 정규화 float**이다 (절대 픽셀도 되지만 혼용 불가). `regional_json`의
+`x`/`width`가 그대로 `x1`/`x2`가 되므로 변환 로직이 필요 없다 —
+`x1 = x`, `x2 = x + width`, `y1 = y`, `y2 = y + height`.
+
+**출력 형식** — 글로벌 라인 + 캐릭터별 `COUPLE` 라인. positive만 이 형식이고,
+negative는 `emit_sequential`과 같은 단일 문자열이다 (확장이 negative 영역 분할을
+지원하지 않는다).
+
+```
+MASK_SIZE(832, 1216) <lora:kafka_illustrious:0.8> masterpiece, best quality, 2girls, rain, night, alley
+COUPLE MASK(0 0.5, 0 1) kafka, purple hair, long hair, black dress
+COUPLE MASK(0.5 1, 0 1) silver hair, short hair, school uniform
+```
+
+규칙:
+
+- 글로벌 라인 = `emit_sequential`에서 **캐릭터 블록만 뺀 것** + LoRA 태그 + `MASK_SIZE`.
+- `MASK_SIZE`는 `preset.mask_size`가 있으면 그 값, 없으면 **현재 생성 해상도**를 쓴다
+  (다이얼로그가 `settings.generation`의 width/height를 넘긴다). 확장의 기본 가정이
+  512x512라 SDXL 해상도에서는 명시하지 않으면 마스크가 어긋난다.
+- 캐릭터가 **0명이면 `COUPLE` 라인이 없다** — 글로벌 라인만 나오며 `MASK_SIZE`도 생략한다.
+- 캐릭터가 **1명이면 `COUPLE` 라인을 만들지 않고** 캐릭터 태그를 글로벌 라인에 합친다.
+  영역 분할의 의미가 없고 `MASK(0 1, 0 1)`은 노이즈다.
+- 위치 태그(`on the left` 등)는 **넣지 않는다** — 좌표가 이미 그 일을 하며 중복은
+  오히려 구도를 왜곡한다. `emit_sequential`과 다른 점이다.
+- 좌표 산출은 `emit_regional_json`과 같은 함수를 공유한다 (§4.3).
+
+### 4.3 `emit_regional_json` — 출력 형식
 
 좌표는 **0..1 정규화**다. 해상도를 곱해 픽셀로 바꾸는 일은 B단계 몫이다.
 
@@ -186,7 +275,9 @@ strip → 빈값 제거 → 등장 순서 유지 중복 제거)을 하므로 그
       "positive": "silver hair, short hair, school uniform",
       "negative": "",
       "x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0,
-      "center_x": 0.25, "center_y": 0.5
+      "center_x": 0.25, "center_y": 0.5,
+      "lora": {"file": "kafka_illustrious.safetensors", "weight": 0.8,
+               "triggers": ["kafka", "purple hair"]}
     }
   ]
 }
@@ -199,8 +290,39 @@ strip → 빈값 제거 → 등장 순서 유지 중복 제거)을 하므로 그
 - `center_x`/`center_y`는 `estimate_positions` 원값을 그대로 병기한다
   (중심점을 쓰는 확장 대비).
 - 캐릭터가 0명이면 `regions: []`.
+- `lora`는 해당 캐릭터에 LoRA가 지정된 경우에만 나온다 (없으면 키 자체가 없다).
+  `regional_json`에서는 트리거를 `positive`에 합치지 않고 **분리해 둔다** —
+  B단계가 노드를 어떻게 결선할지 선택할 수 있어야 한다.
 
 `regional_json`은 `CompiledPrompt`에 저장하지 않는다 — 필요할 때 순수 함수로 만든다.
+
+### 4.4 어텐션 좌표 확장 선정 근거 (2026-09-06 조사)
+
+| 후보 | 방식 | 판정 |
+|---|---|---|
+| **`asagi4/comfyui-prompt-control`** | 프롬프트 텍스트에 `COUPLE MASK(x1 x2, y1 y2)` | **채택** |
+| `Comfy Couple` / `ComfyEnhancedMultiRegion` / `AttentionCouplePPM` | 마스크를 **노드 입력**으로 받음 | 탈락 — 텍스트로 뱉을 것이 없어 A단계에 부적합. B단계 워크플로 결선 후보로는 유효 |
+| `sd-webui-regional-prompter` (A1111) | `ADDCOL`/`ADDROW`/`ADDBASE` | 탈락 — 비율 분할만 가능해 임의 박스 좌표 불가. 문서로만 안내 |
+| Latent Couple 계열 `[prompt: x,y,w,h]` | 확장마다 문법 상이 | 탈락 — 특정 확장 고착 |
+
+채택 이유:
+
+1. **텍스트만으로 완결된다.** A단계의 "복사해서 붙여넣기" 가치와 정확히 맞고,
+   B단계에서 ComfyUI API로 갈 때도 텍스트 인코드 노드에 그대로 넣으면 된다.
+2. **좌표계가 0..1 정규화**라 `regional_json`과 1:1 대응한다.
+3. **`<lora:...>` 인라인 LoRA를 같은 문법으로 처리**한다 — 이번에 추가하는 두 기능
+   (어텐션 좌표 + LoRA 트리거)을 한 출력이 커버한다.
+4. SDXL 지원 확인됨 (다중 텍스트 인코더 per-encoder 프롬프트 지원).
+
+**리스크**: 서드파티 확장의 문법 변경에 노출된다. 완화책 — `couple_mask`는
+`sequential`을 대체하지 않고 **추가 출력**이며, 문법 조립은 `emitters.py`의 한
+함수에 격리되어 있어 변경 시 수정 범위가 좁다.
+
+출처:
+[문법 문서](https://github.com/asagi4/comfyui-prompt-control/blob/master/doc/regional_prompts.md) ·
+[Attention Couple 문서](https://github.com/asagi4/comfyui-prompt-control/blob/master/doc/attention_couple.md) ·
+[저장소](https://github.com/asagi4/comfyui-prompt-control) ·
+[sd-webui-regional-prompter](https://github.com/hako-mikan/sd-webui-regional-prompter)
 
 ## 5. 파이프라인 연결
 
@@ -214,8 +336,13 @@ strip → 빈값 제거 → 등장 순서 유지 중복 제거)을 하므로 그
 - `modify(existing_prompt, instruction, *, mode="hybrid", target="novelai")`
 - `_assemble(raw, mode, target)`:
   - `target` 프리셋의 `kind == "novelai"` → 기존 `PromptFormatter` 경로 그대로
-  - 그 외 → `emit_sequential(...)`로 `base_prompt`/`negative_prompt`를 만든다.
+  - 그 외 → 프리셋의 `flatten`에 따라 `emit_sequential` 또는 `emit_couple_mask`로
+    `base_prompt`/`negative_prompt`를 만든다.
     캐릭터의 `prompt_text`는 로컬 타깃에서 쓰이지 않으므로 채우지 않는다.
+- `compile`/`modify`에 `loras: Mapping[str, LoraEntry] | None = None` 인자를 더한다
+  (다이얼로그의 캐릭터별 선택 결과). `None`이면 LoRA 없이 조립한다.
+- `couple_mask`의 `MASK_SIZE`용 해상도도 인자로 받는다
+  (`resolution: tuple[int, int] | None = None`).
 - `build_compiler(settings)`가 프리셋 목록을 로드해 컴파일러에 넘긴다.
 - **`modify`의 보존 토큰(`__dynamic__`/`{artist:grp}`) 스플라이스는 로컬 타깃에서도
   동일하게 동작해야 한다** — 태그 라인(첫 `\n\n` 앞)에 붙이는 기존 로직이
@@ -239,12 +366,19 @@ strip → 빈값 제거 → 등장 순서 유지 중복 제거)을 하므로 그
   (`NovelAI V5` + 내장 + 사용자 프리셋).
 - 로컬 타깃 선택 시:
   - 미리보기가 **Positive / Negative 2칸**으로 전환, 캐릭터별 미리보기 영역은 숨김
-  - **`영역 JSON` 탭 + 복사 버튼** 표시
+  - 미리보기에 **탭 3개**: `프롬프트`(프리셋 `flatten` 결과) ·
+    `COUPLE MASK` · `영역 JSON`. 각 탭에 복사 버튼.
+    세 출력을 모두 보여 주므로 프리셋의 `flatten` 값이 사용자를 가두지 않는다.
   - 하단에 "캐릭터 프롬프트는 본문에 합쳐집니다" 안내
+  - `COUPLE MASK` 탭에는 **"comfyui-prompt-control 확장이 필요합니다"** 안내를 붙인다.
+- **캐릭터별 LoRA 선택 UI**: 로컬 타깃일 때 캐릭터 목록 옆에 LoRA 드롭다운
+  (기본 "없음") + 가중치 스핀박스. 항목은 `loras.json`에서 채운다.
+  `loras.json`이 없으면 이 UI 자체를 숨긴다.
+  컴파일 결과의 캐릭터 수가 바뀌면 선택을 **캐릭터 id 기준으로 유지**한다.
 - **"적용" 시 캐릭터 프롬프트 탭은 건드리지 않는다** (기존 사용자 입력 보존).
   `CompilerApplyPayload.characters`가 비어 있으므로 main_window가 캐릭터 탭을
   비우지 않도록 확인이 필요하다.
-- 입력 히스토리(`InputHistoryEntry`)에 `target`을 함께 저장하고 복원한다.
+- 입력 히스토리(`InputHistoryEntry`)에 `target`과 LoRA 선택을 함께 저장하고 복원한다.
 
 ### 6.2 설정
 
@@ -263,7 +397,9 @@ target_presets_dir: str = ""     # 빈 값 = 내장 프리셋만
 - 기본 타깃 선택 콤보
 - 선택된 프리셋의 `quality_prefix` / `default_negative`를 텍스트로 직접 편집
   → 편집하면 같은 `id`의 **사용자 프리셋 파일로 저장**된다 (내장은 불변)
-- 프리셋 폴더 경로 선택
+- 프리셋 폴더 경로 선택 (`loras.json`도 이 폴더에서 읽는다)
+- LoRA 레지스트리 상태 표시 (`loras.json` 없음 / N개 로드됨). 편집은 하지 않는다 —
+  파일을 직접 고치게 하고, 폴더 열기 버튼만 둔다.
 
 ### 6.4 i18n
 
@@ -289,6 +425,10 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 | 로컬 타깃인데 캐릭터 0명 | 정상 — 배경 프롬프트 |
 | 관계 태그 매핑 실패 | 드롭 + `warnings`에 1줄 |
 | `emit_sequential` 결과가 빈 문자열 | 기존 `CompilerEmptyResultError` |
+| `loras.json` 없음 | LoRA 기능 비활성 (조용히). 다이얼로그의 LoRA UI 숨김 |
+| `loras.json` 파싱 실패 / 항목 스키마 위반 | 해당 항목만 건너뛰고 로그 경고. 파일 전체가 깨졌으면 빈 레지스트리로 폴백 |
+| 선택된 LoRA id가 레지스트리에 없음 (히스토리 복원 등) | 해당 캐릭터의 LoRA를 "없음"으로 되돌리고 `warnings`에 1줄 |
+| `couple_mask` 요청인데 캐릭터 0~1명 | 정상 — `COUPLE` 라인 없이 글로벌 라인만 |
 
 ## 8. 테스트
 
@@ -297,22 +437,30 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 **신규**
 
 - `tests/test_targets.py` — 프리셋 로드, 사용자/내장 병합, 잘못된 JSON 무시,
-  `default_target` 폴백, `id: "novelai"` 거부
+  `default_target` 폴백, `id: "novelai"` 거부, `loras.json` 로드/누락/깨진 항목 폴백
 - `tests/test_emitters.py`
   - `emit_sequential`: 조립 순서, 1인 위치 태그 생략, 0인 배경 프롬프트,
     count 태그 중복 제거, `underscore_to_space`, 관계 태그 매핑,
     매핑 실패 시 경고, negative 중복 제거, camera 문장의 쉼표 태그화,
     `natural_language` drop/append
+  - `emit_couple_mask`: `MASK_SIZE` 삽입(프리셋 값 / 생성 해상도 / 0인 시 생략),
+    좌표 변환(`x1=x`, `x2=x+width`), 1인 시 `COUPLE` 라인 없이 글로벌 병합,
+    0인 시 글로벌 라인만, 위치 태그가 들어가지 **않을** 것,
+    negative가 단일 문자열일 것
   - `emit_regional_json`: 좌표 균등 분할(1·2·3인), 0인 시 빈 regions,
-    `global.positive`에 캐릭터 태그가 없을 것, `center_x` 정렬 순서
+    `global.positive`에 캐릭터 태그가 없을 것, `center_x` 정렬 순서,
+    LoRA 미지정 시 `lora` 키 부재, 트리거가 `positive`에 합쳐지지 **않을** 것
+  - LoRA 공통: `<lora:stem:weight>`가 글로벌 맨 앞에 1회만(중복 캐릭터),
+    트리거가 해당 캐릭터 블록 맨 앞에, 확장자가 stem으로 잘릴 것
 
 **보강**
 
 - `tests/test_merge.py` — 로컬 타깃일 때 `characters=()`
-- `tests/test_compiler.py` — `target` 인자 전달, `modify`의 보존 토큰이
-  로컬 타깃에서도 유지될 것
-- `tests/test_compiler_dialog.py` — 타깃 전환 시 미리보기 전환, 적용 시
-  캐릭터 탭 미변경, 히스토리의 `target` 복원
+- `tests/test_compiler.py` — `target`/`loras`/`resolution` 인자 전달,
+  `flatten`에 따른 emitter 선택, `modify`의 보존 토큰이 로컬 타깃에서도 유지될 것
+- `tests/test_compiler_dialog.py` — 타깃 전환 시 미리보기 전환, 탭 3개 렌더,
+  적용 시 캐릭터 탭 미변경, 히스토리의 `target`·LoRA 선택 복원,
+  `loras.json` 없을 때 LoRA UI 숨김, 캐릭터 수 변경 시 id 기준 선택 유지
 - `tests/test_settings_compiler.py` — `default_target`/`target_presets_dir` 왕복 저장
 
 ## 9. 변경 파일
@@ -321,8 +469,8 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 
 | 파일 | 규모 |
 |---|---|
-| `src/naiauto/core/prompt/targets.py` | ~120줄 |
-| `src/naiauto/core/prompt/emitters.py` | ~180줄 |
+| `src/naiauto/core/prompt/targets.py` | ~160줄 (프리셋 + LoRA 레지스트리) |
+| `src/naiauto/core/prompt/emitters.py` | ~260줄 (emitter 3종) |
 | `src/naiauto/resources/prompt_targets/illustrious.json` | — |
 | `src/naiauto/resources/prompt_targets/animagine.json` | — |
 | `src/naiauto/resources/prompt_targets/sdxl_base.json` | — |
@@ -332,15 +480,19 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 **수정**
 
 - `core/prompt/schema.py` — `CompiledPrompt.target`
-- `core/prompt/compiler.py` — `target=` 인자, `_assemble` 분기, `build_compiler` 프리셋 로드
+- `core/prompt/compiler.py` — `target`/`loras`/`resolution` 인자, `_assemble` 분기,
+  `build_compiler` 프리셋·레지스트리 로드
 - `core/prompt/merge.py` — 로컬 타깃 `characters=()`
 - `core/prompt/errors.py` — `TargetPresetError`
 - `core/prompt/templates/system_prompt.md` — 첫 줄 중립화
 - `core/settings/schema.py` — `default_target`, `target_presets_dir`
-- `ui/prompt_compiler_dialog.py` — 타깃 콤보, 미리보기 전환, 영역 JSON 탭
-- `ui/options_pages/prompt_ai_page.py` — "출력 타깃" 그룹
-- `resources/languages/{ko,en,ja,zh}.json` — `compiler.target*`
-- `README.md`, `MANUAL_KR.md` — 기능 설명
+- `ui/prompt_compiler_dialog.py` — 타깃 콤보, 미리보기 3탭, 캐릭터별 LoRA 선택 UI
+- `ui/options_pages/prompt_ai_page.py` — "출력 타깃" 그룹, LoRA 레지스트리 상태
+- `resources/languages/{ko,en,ja,zh}.json` — `compiler.target*`, `compiler.lora*`
+- `README.md` — 기능 설명
+- `MANUAL_KR.md` — 기능 설명 + **comfyui-prompt-control 설치 안내** +
+  **A1111/Forge에서 Regional Prompter와 함께 쓰는 법** (emitter를 만들지 않는 대신
+  `sequential` 출력을 `ADDCOL`로 나눠 쓰는 절차를 문서로 안내)
 
 **수정 불필요**: `packaging/nai-auto-v5.spec` — `resources` 폴더를 통째로 번들하므로
 `prompt_targets/`가 자동 포함된다.
@@ -357,5 +509,8 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 - 샘플러·스케줄러·모델 이름 매핑, 해상도 프리셋
 - 메타데이터 저장 (A1111 `parameters` PNG chunk vs NAI stealth PNG)
 - Anlas/크레딧 로직 우회, UI 모델 선택기 개편
-- `emit_regional_json`을 실제 ComfyUI 워크플로에 주입 (영역 분할 노드 결선)
-- LoRA 트리거 단어 매핑, 가중치 문법 활성화
+- `emit_regional_json`을 실제 ComfyUI 워크플로에 주입 (영역 분할 노드 결선).
+  A단계에서 `regions[].lora`를 프롬프트에 합치지 않고 분리해 둔 이유가 이것이다 —
+  `LoraLoader` 노드로 실제 결선할지, 텍스트 태그로 넘길지 B단계가 고른다
+- 가중치 문법(`weight_syntax`) 활성화 — 프리셋 필드는 A에서 이미 만들어 둔다
+- LoRA 파일 존재 검증 (백엔드의 LoRA 폴더를 조회할 수 있게 되는 시점)
