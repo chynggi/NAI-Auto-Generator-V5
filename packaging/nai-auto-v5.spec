@@ -33,11 +33,13 @@ APP_NAME = "NAI-Auto-V5"
 # 그러면 WD14가 빠진 배포본이 조용히 만들어져, 릴리스 검증(--selftest)에서야 드러난다.
 # 실제로 v0.6.7 릴리스에서 공개 저장소의 pyproject.toml에 onnxruntime이 없어 이 일이
 # 벌어졌다 — 빌드하는 자리에서 바로 멈추게 한다.
-_MISSING = [name for name in ("onnxruntime", "numpy") if importlib.util.find_spec(name) is None]
+_MISSING = [
+    name for name in ("onnxruntime", "numpy", "lmstudio") if importlib.util.find_spec(name) is None
+]
 if _MISSING:
     raise SystemExit(
-        f"빌드 환경에 {', '.join(_MISSING)} 가 없습니다. WD14 자동 태깅이 빠진 배포본이 "
-        "만들어지므로 여기서 멈춥니다 — `pip install .` 로 런타임 의존성을 먼저 설치하세요."
+        f"빌드 환경에 {', '.join(_MISSING)} 가 없습니다. WD14 자동 태깅 또는 자연어 프롬프트 생성이 "
+        "빠진 배포본이 만들어지므로 여기서 멈춥니다 — `pip install .` 로 런타임 의존성을 먼저 설치하세요."
     )
 
 keyring_datas, keyring_binaries, keyring_hiddenimports = collect_all("keyring")
@@ -62,6 +64,11 @@ llama_cpp_datas, llama_cpp_binaries, llama_cpp_hiddenimports = collect_all(
     filter_submodules=lambda m: not m.startswith("llama_cpp.server"),
 )
 
+# lmstudio(자연어 프롬프트 생성)는 순수 파이썬이지만 웹소켓 등 하위 의존성을 지연 import한다.
+# collect_all로 데이터·하이든임포트를 통째로 넣지 않으면 프로즌 빌드에서 `import lmstudio`가
+# 조용히 실패해 이 기능만 "SDK를 쓸 수 없음"으로 보인다. --selftest가 import를 실제로 확인한다.
+lms_datas, lms_binaries, lms_hiddenimports = collect_all("lmstudio")
+
 datas = [
     # (원본, 번들 안 위치) — 앱이 naiauto/resources/... 로 찾는다
     (str(PACKAGE_DIR / "resources"), "naiauto/resources"),
@@ -70,12 +77,13 @@ datas = [
     *keyring_datas,
     *llama_cpp_datas,
     *onnx_datas,
+    *lms_datas,
 ]
 
 analysis = Analysis(
     [str(SPEC_DIR / "entry.py")],  # app.py를 직접 쓰면 상대 import가 깨진다 (entry.py 주석 참고)
     pathex=[str(PROJECT_DIR / "src")],
-    binaries=[*keyring_binaries, *llama_cpp_binaries, *onnx_binaries],
+    binaries=[*keyring_binaries, *llama_cpp_binaries, *onnx_binaries, *lms_binaries],
     datas=datas,
     # llama_cpp 런타임 의존성: lazy import 경로라 정적 분석이 놓치므로 명시한다.
     # numpy는 PyInstaller 전용 hook이 발견만 되면 .so까지 함께 담는다.
@@ -84,6 +92,7 @@ analysis = Analysis(
         *keyring_hiddenimports,
         *llama_cpp_hiddenimports,
         *onnx_hiddenimports,
+        *lms_hiddenimports,
         "numpy",
         "diskcache",
         "jinja2",

@@ -12,13 +12,30 @@ import platformdirs
 from pydantic import BaseModel, Field
 
 APP_NAME = "NAI-Auto-V5"
+#: QSettings(창 크기·스플리터 폭 등 UI 상태)의 조직 이름.
+#: 비워 두면 Windows 레지스트리 백엔드가 AccessError 상태가 되어 읽기도 쓰기도
+#: 조용히 무시된다 — 반드시 QCoreApplication.setOrganizationName()으로 지정해야 한다.
+ORG_NAME = "sagawa8b"
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 DEFAULT_WORD_LIMIT = 20
 CUSTOM_RESOLUTION_SLOTS = 6
 QUICK_COUNT_SLOTS = 4
 #: 생성 바의 퀵 매수 버튼 기본값 (V4.5의 Quick Generation 프리셋과 같은 자리)
 DEFAULT_QUICK_COUNTS = (5, 10, 30, 200)
+
+
+#: 동일 조건으로 다시 생성할 때의 동작.
+#: "generate"    — 그대로 생성한다 (같은 이미지가 한 장 더 나온다)
+#: "random_seed" — 시드만 새로 뽑아 생성한다 (기본)
+#: "block"       — 경고만 하고 생성하지 않는다
+DUPLICATE_ACTIONS = ("generate", "random_seed", "block")
+DEFAULT_DUPLICATE_ACTION = "random_seed"
+
+
+def duplicate_action(value: str) -> str:
+    """알 수 없는 값(손으로 고친 settings.json)은 기본값으로 떨어뜨린다."""
+    return value if value in DUPLICATE_ACTIONS else DEFAULT_DUPLICATE_ACTION
 
 
 def default_data_dir() -> Path:
@@ -95,6 +112,11 @@ class BatchSettings(BaseModel):
     #: True면 "세팅별 연속 생성"이 고른 세팅 파일을 순서대로 돌지 않고 매번 무작위로 고른다
     #: (같은 파일이 연달아 두 번 나오지는 않는다).
     random_settings_order: bool = False
+    #: 직전에 만든 이미지와 요청이 완전히 같을 때(메타데이터를 불러온 뒤 그대로 다시
+    #: 누른 경우) 어떻게 할지. DUPLICATE_ACTIONS 참고. 알 수 없는 값은 읽을 때
+    #: duplicate_action()이 기본값으로 떨어뜨린다 — 여기서 막으면 손으로 고친
+    #: settings.json 하나가 설정 전체를 날린다 (store.load_settings의 복구 규칙).
+    duplicate_action: str = DEFAULT_DUPLICATE_ACTION
 
 
 class CustomResolution(BaseModel):
@@ -121,6 +143,9 @@ class UiState(BaseModel):
     """Collapsible_Section 펼침 상태. 기본은 접힘."""
 
     ai_settings_expanded: bool = False
+    #: 캐릭터 위치 지정 캔버스. 여기만 기본이 펼침이다 — 접힌 채로 뜨면 캐릭터를
+    #: 두 명 넣었을 때 위치를 지정할 수 있다는 사실 자체가 보이지 않는다.
+    position_panel_expanded: bool = True
 
 
 class PromptFontSettings(BaseModel):
@@ -169,6 +194,28 @@ class CompilerSettings(BaseModel):
     preserve_natural_language: bool = True
     relationship_style: str = "natural"          # "natural" | "tag"
 
+class LMStudioSettings(BaseModel):
+    """자연어 프롬프트 생성용 로컬 LLM(LM Studio) 연결 설정.
+
+    LM Studio 앱이 서빙하는 로컬 LLM에 공식 파이썬 SDK로 붙어, 입력한 단어/문장/이미지를
+    NovelAI V5 프롬프트로 바꿔 준다. `core/llm/lmstudio_client.py` 참고.
+    """
+
+    host: str = "localhost:1234"  # LM Studio 서버 host:port
+    model: str = ""  # 마지막으로 고른 모델 식별자 ("" = 로드된 첫 모델 자동 사용)
+    timeout_seconds: float = 120.0  # 동기 응답 타임아웃 (0 이하 = 무제한)
+    system_prompt: str = ""  # "" = 스타일 기본 프롬프트. 값이 있으면 그 뒤에 덧붙는 추가 지시
+    default_apply_mode: str = "append"  # "append" | "replace" — 결과를 프롬프트에 넣는 방식
+    #: 출력 스타일 기본값. "natural"(서술형 자연어) | "danbooru"(쉼표 구분 태그).
+    #: 모델이 두 형태를 오가는 편차를 없애기 위해 스타일마다 시스템 프롬프트를 다르게 쓴다.
+    default_style: str = "natural"
+    #: 프롬프트 어시스턴트 창이 열릴 때 기본 모드.
+    #: "wd_tagger"(WD14 로컬) | "llm_tagger"(LM Studio 태거) | "llm_assistant"(이미지+지시 변형).
+    default_mode: str = "llm_tagger"
+    #: 출력 길이 기본값. "short" | "medium" | "long".
+    #: LLM은 max_tokens+프롬프트 지시로, WD 태거는 일반 태그 임계값으로 번역된다.
+    default_length: str = "medium"
+
 
 class AppSettings(BaseModel):
     schema_version: int = CURRENT_SCHEMA_VERSION
@@ -197,6 +244,8 @@ class AppSettings(BaseModel):
     debug_logging: bool = False  # 로그 뷰어에서 켜면 DEBUG 레벨로 기록
     show_image_source: bool = False  # i2i 패널은 보기 메뉴(F2)로 켤 때만 표시
     show_enhance: bool = False  # 강화(업스케일) 패널은 보기 메뉴(F4)로 켤 때만 표시
+    #: 결과 이미지 위에 그 장의 프롬프트를 겹쳐 보여 준다 (보기 메뉴 F8, V4의 '프롬프트 결과 표시')
+    show_result_overlay: bool = False
     measure_credit: bool = False  # V5 크레딧 소모량 측정 로그 (도구 메뉴)
     check_updates_on_start: bool = True  # 시작 시 새 버전 확인 (기타 메뉴에서 수동 확인도 가능)
     generation: GenerationDefaults = Field(default_factory=GenerationDefaults)
@@ -207,6 +256,7 @@ class AppSettings(BaseModel):
     prompt_font: PromptFontSettings = Field(default_factory=PromptFontSettings)
     prompt_ai: PromptAISettings = Field(default_factory=PromptAISettings)
     compiler: CompilerSettings = Field(default_factory=CompilerSettings)
+    lmstudio: LMStudioSettings = Field(default_factory=LMStudioSettings)
 
     def log_dir_path(self) -> Path:
         """설정된 로그 디렉터리. 빈 문자열이면 OS 표준 위치."""

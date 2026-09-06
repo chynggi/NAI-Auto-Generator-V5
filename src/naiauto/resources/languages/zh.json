@@ -22,10 +22,13 @@
       "gallery": "提示管理器(Prompt Manager)",
       "gallery_view": "画廊",
       "wd14_auto_tag": "WD14 自动标签...",
+      "prompt_gen": "自然语言提示词生成 (LM Studio)...",
+      "prompt_assistant": "NAI 提示词助手...",
       "presets": "预设...",
       "preset_applied": "已应用预设。",
       "prompt_compiler": "自然语言提示词编译器...",
-      "accounts": "API 账户管理(Accounts)..."
+      "accounts": "API 账户管理(Accounts)...",
+      "narrow_panel": "收窄输入面板"
     },
     "statusbar": {
       "before_login": "需要登录。",
@@ -43,7 +46,8 @@
       "job_stopped": "已停止 (生成{}张)",
       "job_error": "因错误中止: {}",
       "by_settings_progress": "按设置连续生成中 ({}/{}) - {}",
-      "by_settings_progress_inf": "按设置连续生成中 ({}张) - {}"
+      "by_settings_progress_inf": "按设置连续生成中 ({}张) - {}",
+      "duplicate_seed_changed": "与上次生成条件相同，已将种子改为 {}。"
     },
     "status": {
       "tags_reloaded": "标签自动完成已重新加载。"
@@ -91,6 +95,7 @@
       "uc_preset": "负面预设:",
       "quality_tags": "自动添加质量标签",
       "undesired_content": "负面内容",
+      "position_panel": "位置指定",
       "position_hint": "拖动标记来指定角色位置。画布比例与当前生成分辨率一致。",
       "position_auto": "自动",
       "summary_ai": "步数 {0} · PG {1} · 种子 {2} · {3}",
@@ -98,7 +103,8 @@
       "section_expanded": "已展开",
       "section_collapsed": "已折叠",
       "options_menu": "选项...",
-      "manual_position": "手动位置"
+      "manual_position": "手动位置",
+      "toggle_slot": "折叠 / 展开该角色"
     },
     "image_options": {
       "title": "图像选项",
@@ -210,7 +216,11 @@
       "save_image_short": "保存",
       "prompt_title": "结果提示词",
       "overlay_toggle": "显示提示词",
-      "overlay_toggle_short": "显示"
+      "overlay_toggle_short": "显示",
+      "field_rescale": "Rescale",
+      "field_scheduler": "噪声调度",
+      "overlay_waiting": "开始生成后，这里会显示该图片的提示词与设置。",
+      "overlay_toggle_hint": "在结果图像上叠加显示刚生成图片的提示词与设置 (F8)。显示的是展开通配符与画师组合之后实际发送的值。"
     },
     "dialogs": {
       "login_title": "NAI API 登录",
@@ -292,7 +302,8 @@
       "autogenerate_error": "生成图片时出现问题。\n\n{0}",
       "fixed_seed_batch": "连续生成需要随机种子。请启用种子“随机”选项，或将生成张数设为 1。",
       "wd14_model_missing": "未找到 WD14 模型（缺少 {}）。\n\n{}\n\n请在 选项 → 标签 中指定模型文件夹，并点击“下载模型”。",
-      "wd14_runtime_missing": "无法使用 WD14 自动标签。\n\n无法导入 onnxruntime：\n{}\n\n若从源码运行，请执行 `pip install -e .`（或 `pip install onnxruntime numpy`）。\n若使用发行版（exe），v0.6.7 及以上版本已内置。"
+      "wd14_runtime_missing": "无法使用 WD14 自动标签。\n\n无法导入 onnxruntime：\n{}\n\n若从源码运行，请执行 `pip install -e .`（或 `pip install onnxruntime numpy`）。\n若使用发行版（exe），v0.6.7 及以上版本已内置。",
+      "duplicate_generation": "提示词、种子与分辨率与上次生成完全相同。请修改种子或打开种子“随机”后再生成。"
     },
     "connection": {
       "server": "服务器:",
@@ -488,7 +499,24 @@
       "wd14_download_failed": "无法下载模型。",
       "wd14_installed": "{} — 已安装。工具 → WD14 自动标签 会使用该模型。",
       "wd14_not_installed": "该模型尚未放入文件夹。请点击“下载模型”，或在上方指定已下载模型的文件夹（v3 模型约 400MB）。",
-      "wd14_runtime_missing": "⚠ 无法使用 onnxruntime，标签推理无法运行（{}）。源码运行请执行 `pip install -e .`；发行版请下载 v0.6.7 或更高版本。下载模型仍然可用。"
+      "wd14_runtime_missing": "⚠ 无法使用 onnxruntime，标签推理无法运行（{}）。源码运行请执行 `pip install -e .`；发行版请下载 v0.6.7 或更高版本。下载模型仍然可用。",
+      "llm_host": "LM Studio 服务器 (host:port)",
+      "llm_test": "测试连接",
+      "llm_model_hint": "模型在提示词生成窗口中选择(从服务器已加载的列表中)。此处不保存，因此服务器不会不必要地加载多个模型。",
+      "llm_timeout": "响应超时(秒)",
+      "llm_style": "默认输出风格",
+      "llm_style_natural": "自然语言提示词",
+      "llm_style_danbooru": "Danbooru 标签",
+      "llm_apply_mode": "默认应用方式",
+      "llm_apply_append": "追加到提示词",
+      "llm_apply_replace": "覆盖提示词",
+      "llm_system_prompt": "系统提示词(留空为默认)",
+      "llm_system_prompt_hint": "用于指示 LLM 生成何种提示词的说明。留空则使用 NovelAI V5 的内置指示。",
+      "llm_not_installed": "无法使用 LM Studio Python SDK（{}）。若从源码运行，请执行 `pip install lmstudio` 安装。",
+      "llm_connect_ok": "已连接到 {} 的 LM Studio 服务器。",
+      "llm_connect_failed": "无法连接到 {}。请确认 LM Studio 应用已打开并启动了服务器，且地址正确。",
+      "llm_models_found": "找到 {} 个已加载的模型。",
+      "llm_no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。"
     },
     "resolution": {
       "title": "分辨率",
@@ -518,6 +546,8 @@
       "prompt_ai_desc": "设置自然语言提示词编译器的 LLM 提供方与默认行为。",
       "tags": "标签补全",
       "tags_desc": "设置标签自动补全文件的路径。",
+      "llm": "提示词生成 (LLM)",
+      "llm_desc": "配置用于自然语言提示词生成的 LM Studio 本地 LLM 连接。",
       "log": "日志设置",
       "log_desc": "管理调试模式和日志设置。"
     },
@@ -629,10 +659,15 @@
     "batch": {
       "count": "生成数量 (0=无限):",
       "delay": "间隔(秒):",
-      "random_resolution": "每张随机分辨率 (横/竖/正方形)",
+      "random_resolution": "随机分辨率",
       "random_resolution_tooltip": "每次生成时随机选择 Wide/Square/Portrait 中的一种分辨率。i2i/局部重绘时会优先使用原图尺寸，因此不生效。",
       "random_settings_order": "按设置连续生成时随机选择设置文件",
-      "random_settings_order_hint": "关闭时按选择顺序循环；开启后每张随机挑选一个(不会连续两次使用同一个文件)。"
+      "random_settings_order_hint": "关闭时按选择顺序循环；开启后每张随机挑选一个(不会连续两次使用同一个文件)。",
+      "duplicate_action": "以相同条件再次生成时",
+      "duplicate_action_generate": "照常生成（会得到同一张图）",
+      "duplicate_action_random_seed": "自动随机更换种子",
+      "duplicate_action_block": "提示警告，不进行生成",
+      "duplicate_action_hint": "当提示词、种子、分辨率等所有数值都与上一张生成的图片相同时生效。载入元数据会连种子一起还原，因此连按两次生成会为同一张图重复消耗额度。种子为“随机”，或提示词中含有通配符、随机语法时不会生效，因为那些每次结果都不同。"
     },
     "image_info": {
       "title": "图像信息",
@@ -657,6 +692,7 @@
       "no_file": "请选择文件",
       "open_file": "打开文件",
       "apply_selected": "应用所选",
+      "copy_selected": "复制所选项目",
       "zoom_hint": "滚动: 缩放，双击: 重置"
     },
     "image_source": {
@@ -754,6 +790,94 @@
       "copy_tooltip": "把勾选的标签以逗号分隔（与写入提示词时相同的格式）复制到剪贴板。窗口不会关闭。",
       "copied": "已复制 {} 个标签到剪贴板。",
       "copy_nothing": "没有可复制的标签，请先勾选。"
+    },
+    "lmstudio": {
+      "title": "提示词生成 (LM Studio)",
+      "tab_text": "文本",
+      "tab_image": "图像",
+      "model": "模型",
+      "refresh": "刷新",
+      "models_found": "已加载 {} 个模型",
+      "no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。",
+      "stop": "停止",
+      "stopping": "正在停止...",
+      "stopped": "已停止生成。",
+      "style": "输出风格",
+      "style_natural": "自然语言提示词",
+      "style_danbooru": "Danbooru 标签",
+      "text_placeholder": "输入词语或句子。例如：“雨夜城市，撑伞的少女”",
+      "drop_here": "将图像拖到此处\n或点击“浏览”\n(需要视觉模型 VLM)",
+      "browse": "浏览...",
+      "clear_image": "清除图像",
+      "choose_image": "选择图像",
+      "image_filter": "图像 (*.png *.jpg *.jpeg *.webp);;所有文件 (*)",
+      "image_loaded": "已加载图像：{}",
+      "image_open_failed": "无法打开图像：{}",
+      "generate": "生成",
+      "generating": "正在通过 LM Studio 生成提示词...",
+      "need_input": "请先输入文本或添加图像。",
+      "result": "生成的提示词(可编辑)",
+      "result_placeholder": "生成的提示词将显示在这里。",
+      "result_negative": "负面(可选)",
+      "done": "已生成提示词。",
+      "empty_result": "模型未返回提示词。请重试或更改输入。",
+      "apply_append": "追加到提示词",
+      "apply_replace": "覆盖提示词",
+      "copy": "📋 复制",
+      "copied": "已将提示词复制到剪贴板。",
+      "err_not_installed": "无法使用 LM Studio Python SDK（{}）。若从源码运行，请执行 `pip install lmstudio` 安装。",
+      "err_connection": "无法连接到 LM Studio 服务器。请确认应用已打开并启动服务器，并在 选项 → 提示词生成 中检查地址。({})",
+      "err_no_model": "LM Studio 中没有已加载的模型。请先加载模型。({})",
+      "err_vision": "该模型无法理解图像。请加载视觉模型(VLM，例如 Qwen VL)，或仅使用文本生成。({})",
+      "err_timeout": "响应超时。请使用更小的模型，或在选项中增大超时时间。({})",
+      "err_response": "提示词生成出错：{}"
+    },
+    "assistant": {
+      "title": "NAI 提示词助手",
+      "text_input": "文本输入",
+      "text_placeholder": "输入词语·句子，或要应用到图像的指令。",
+      "image_input": "图像输入",
+      "drop_here": "将图像拖到此处\n或点击“浏览”",
+      "browse": "浏览...",
+      "clear_image": "清除图像",
+      "choose_image": "选择图像",
+      "image_filter": "图像 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)",
+      "image_loaded": "已加载图像：{}",
+      "image_open_failed": "无法打开图像：{}",
+      "mode_wd": "WD 标签器：用 WD 模型生成 Danbooru 标签。",
+      "mode_llm_tagger": "LLM 标签器：用 LM Studio 模型生成自然语言或 Danbooru 标签。",
+      "mode_llm_assistant": "LLM 助手：同时使用文本和图像生成你想要的内容。",
+      "model": "模型",
+      "refresh": "刷新",
+      "models_found": "已加载 {} 个模型",
+      "no_models": "没有已加载的模型。请先在 LM Studio 中加载模型。",
+      "style": "输出风格",
+      "style_natural": "自然语言提示词",
+      "style_danbooru": "Danbooru 标签",
+      "length": "输出长度",
+      "length_short": "短",
+      "length_medium": "中",
+      "length_long": "长",
+      "generate": "生成",
+      "generate_wd": "生成标签",
+      "generate_assistant": "生成助手结果",
+      "stop": "停止",
+      "stopping": "正在停止...",
+      "stopped": "已停止生成。",
+      "generating": "正在生成...",
+      "need_input": "请先输入文本或添加图像。",
+      "need_image": "WD 标签器需要图像。请在右侧添加图像。",
+      "need_image_assistant": "助手模式需要用于变形的图像。请在右侧添加图像。",
+      "wd_unavailable": "无法使用 WD 标签器。请在 选项 → 标签 中准备模型。",
+      "result": "生成的提示词(可编辑)",
+      "result_placeholder": "生成的提示词将显示在这里。",
+      "result_negative": "负面(可选)",
+      "done": "完成。",
+      "empty_result": "结果为空。请重试或更改输入。",
+      "apply_append": "追加到提示词",
+      "apply_replace": "覆盖提示词",
+      "copy": "📋 复制",
+      "copied": "已将结果复制到剪贴板。"
     }
   }
 }

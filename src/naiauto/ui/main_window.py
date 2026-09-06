@@ -57,9 +57,17 @@ from ..core.logging_setup import configure_logging, crash_log_path, log_path
 from ..core.metadata.reuse import ReusableSettings
 from ..core.presets import CharacterPromptPreset, GenerationPreset, PresetError, PresetStore
 from ..core.prompt.merge import merge_negatives
+from ..core.prompt_dynamics import has_dynamic_syntax
 from ..core.resolution_catalog import ResolutionCatalog
+from ..core.result_summary import ResultLabels, compose_result_summary
 from ..core.settings import accounts, credentials
-from ..core.settings.schema import APP_NAME, QUICK_COUNT_SLOTS, AppSettings, CharacterPromptState
+from ..core.settings.schema import (
+    APP_NAME,
+    QUICK_COUNT_SLOTS,
+    AppSettings,
+    CharacterPromptState,
+    duplicate_action,
+)
 from ..core.settings.store import ensure_dirs
 from ..core.tag_completer import TagCompleter, resolve_database_path
 from ..core.updates import RELEASES_PAGE, ReleaseInfo, check_for_update
@@ -86,7 +94,9 @@ from .tag_completer_dropdown import TagCompleterDropdown
 from .widgets.character_prompts import CharacterPromptsWidget, CharacterSlot
 from .widgets.collapsible_section import CollapsibleSection, compose_ai_summary
 from .widgets.enhance_panel import EnhancePanel
+from .widgets.flow_layout import FlowLayout
 from .widgets.image_source import ImageSourceWidget
+from .widgets.prompt_overlay import PromptOverlay
 from .widgets.prompt_tabs import PromptTabs
 from .widgets.resize_handle import ResizeHandle
 from .widgets.resolution_panel import ResolutionPanel
@@ -113,6 +123,9 @@ _ERROR_TYPE_TO_KEY = {
 
 WINDOW_SIZE = (1180, 760)
 SPLITTER_SIZES = (460, 720)  # 입력 패널 / 결과 패널
+#: 좌측 입력 패널을 여기까지 좁힐 수 있다 — 기본 폭(460)의 절반. 이 아래로는
+#: 프롬프트 입력창이 한 줄도 제대로 안 보여 의미가 없다. 줄바꿈은 FlowLayout이 맡는다.
+LEFT_PANEL_MIN_WIDTH = 230
 
 
 def _format_seconds(value: float) -> str:
@@ -128,6 +141,14 @@ def _format_duration(seconds: int) -> str:
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m" if minutes else f"{seconds}s"
+
+
+def _has_dynamic_prompt(request: GenerationRequest) -> bool:
+    """요청의 프롬프트에 생성마다 다르게 전개되는 문법이 있는가 (와일드카드·랜덤 선택 등)."""
+    texts = [request.prompt, request.negative_prompt]
+    for caption in request.characters:
+        texts += [caption.prompt, caption.uc]
+    return any(has_dynamic_syntax(text) for text in texts)
 
 
 class MainWindow(QMainWindow):
@@ -171,6 +192,15 @@ class MainWindow(QMainWindow):
         self._qsettings = QSettings()
         #: 세팅별 연속 생성이 순환할 파일 목록 — 비어 있으면 진행 중이 아니다.
         self._settings_batch_paths: list[str] = []
+        #: 실행 중인 잡의 요청 / 마지막으로 이미지가 나온 요청. 동일 조건 재생성 감지가 쓴다.
+        #: 완성된 것만 기억한다 — 실패한 생성을 같은 값으로 다시 시도하는 길을 막으면 안 된다.
+        self._running_request: GenerationRequest | None = None
+        self._last_completed_request: GenerationRequest | None = None
+        #: 결과 오버레이가 보여 줄 요청 — 와일드카드가 전개된, 그 장에 실제로 보낸 값이다.
+        #: `_last_completed_request`(동일 조건 재생성 감지용)와 달리 전개 후 값이라 다르다.
+        self._overlay_request: GenerationRequest | None = None
+        #: F9로 입력 패널을 접기 직전의 스플리터 폭 — 다시 누르면 여기로 되돌린다.
+        self._wide_splitter_sizes: list[int] | None = None
 
         #: 마지막으로 연 컴파일러 다이얼로그 (적용 결과 요약에서 _compiled를 읽는다).
         self._compiler_dialog: PromptCompilerDialog | None = None
@@ -244,6 +274,9 @@ class MainWindow(QMainWindow):
         self.ai_settings_body = QWidget()
         form = QFormLayout(self.ai_settings_body)
         form.setContentsMargins(0, 0, 0, 0)
+        # 패널이 좁아지면 "라벨 | 값" 두 칸을 유지하지 못한다 — 그럴 때만 라벨을 값 위로 내린다.
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.sampler_combo = QComboBox()
         self.scheduler_combo = QComboBox()
         self.steps_spin = QSpinBox()
@@ -332,7 +365,7 @@ class MainWindow(QMainWindow):
         left_scroll = QScrollArea()
         left_scroll.setWidget(left)
         left_scroll.setWidgetResizable(True)
-        left_scroll.setMinimumWidth(470)
+        left_scroll.setMinimumWidth(LEFT_PANEL_MIN_WIDTH)
 
         # 생성 바는 스크롤 밖 맨 아래에 고정한다 (웹 UI처럼 상태바 바로 위).
         # 입력을 아무리 스크롤해도 생성 버튼은 늘 같은 자리에 있다.
@@ -346,6 +379,9 @@ class MainWindow(QMainWindow):
         # 오른쪽: 결과 미리보기 — 마우스 스크롤로 확대/축소된다 (ZoomableImageView)
         self.preview_label = ZoomableImageView()
         self.result_panel = self.preview_label
+        # 방금 만든 이미지의 프롬프트를 이미지 위에 겹쳐 보여 준다 (보기 메뉴에서 켠다).
+        # 레이아웃이 아니라 절대 위치라, 켜고 꺼도 이미지 크기는 그대로다.
+        self.result_overlay = PromptOverlay(self.preview_label)
         splitter.addWidget(self.result_panel)
         splitter.setSizes(list(SPLITTER_SIZES))
 
@@ -408,6 +444,12 @@ class MainWindow(QMainWindow):
         self.result_panel_action.setShortcut("F11")
         self.result_panel_action.toggled.connect(self._on_toggle_result_panel)
 
+        # 입력 패널을 최소 폭까지 접었다 펴는 프리셋. 스플리터를 매번 끌지 않아도 되게.
+        self.narrow_panel_action = self.view_menu.addAction("")
+        self.narrow_panel_action.setCheckable(True)
+        self.narrow_panel_action.setShortcut("F9")
+        self.narrow_panel_action.toggled.connect(self._on_narrow_panel_toggled)
+
         self.reset_layout_action = self.view_menu.addAction("")
         self.reset_layout_action.setShortcut("Ctrl+R")
         self.reset_layout_action.triggered.connect(self.reset_layout)
@@ -425,6 +467,13 @@ class MainWindow(QMainWindow):
         self.enhance_action.setShortcut("F4")
         self.enhance_action.toggled.connect(self.enhance_panel.set_active)
         self.enhance_action.toggled.connect(self._on_enhance_toggled)
+
+        # 결과 프롬프트 오버레이 (V4의 "프롬프트 결과 표시" 체크박스)
+        self.result_overlay_action = self.view_menu.addAction("")
+        self.result_overlay_action.setCheckable(True)
+        self.result_overlay_action.setShortcut("F8")
+        self.result_overlay_action.toggled.connect(self._on_result_overlay_toggled)
+        self._wire_result_overlay_toggle()
 
         # M3: Gallery View action
         self.view_menu.addSeparator()
@@ -444,10 +493,10 @@ class MainWindow(QMainWindow):
 
         self.tools_menu.addSeparator()
 
-        # M3: WD14 Auto-Tag action
-        self.wd14_action = self.tools_menu.addAction("")
-        self.wd14_action.setShortcut("Ctrl+T")
-        self.wd14_action.triggered.connect(self._on_open_wd14)
+        # NAI 프롬프트 어시스턴트 — WD 태거 + LM Studio를 한 창으로 통합 (Ctrl+G)
+        self.assistant_action = self.tools_menu.addAction("")
+        self.assistant_action.setShortcut("Ctrl+G")
+        self.assistant_action.triggered.connect(self._on_open_assistant)
 
         # M3: Presets action
         self.presets_action = self.tools_menu.addAction("")
@@ -495,9 +544,11 @@ class MainWindow(QMainWindow):
         """매수·간격 + 생성 버튼 한 줄. 스크롤 밖에 고정되는 바."""
         self.generate_group = QGroupBox()
         bar_layout = QVBoxLayout(self.generate_group)
-        batch_row = QHBoxLayout()
-        quick_row = QHBoxLayout()
-        button_row = QHBoxLayout()
+        # 세 줄 모두 FlowLayout — 패널을 좁히면 한 줄에 안 들어가는 위젯이 다음 줄로 넘어간다.
+        # QHBoxLayout이면 이 줄들의 최소 폭이 그대로 좌측 패널 하한이 되어 절반까지 못 줄인다.
+        batch_row = FlowLayout()
+        quick_row = FlowLayout(expand=True)
+        button_row = FlowLayout(expand=True)
         bar_layout.addLayout(batch_row)
         bar_layout.addLayout(quick_row)
         bar_layout.addLayout(button_row)
@@ -512,6 +563,9 @@ class MainWindow(QMainWindow):
         self.count_label = QLabel()
         self.delay_label = QLabel()
         self.random_resolution_check = QCheckBox()
+        # 결과 프롬프트 오버레이 — 생성 UI에서 바로 켜고 끈다 (V4도 결과 이미지 옆에 있었다).
+        # 보기 메뉴의 같은 항목(F8)과 서로를 따라간다 — 아래 _wire_result_overlay_toggle 참고.
+        self.result_overlay_check = QCheckBox()
 
         self.once_button = QPushButton()
         self.auto_button = QPushButton()
@@ -525,12 +579,10 @@ class MainWindow(QMainWindow):
 
         batch_row.addWidget(self.count_label)
         batch_row.addWidget(self.count_spin)
-        batch_row.addSpacing(12)
         batch_row.addWidget(self.delay_label)
         batch_row.addWidget(self.delay_spin)
-        batch_row.addSpacing(12)
         batch_row.addWidget(self.random_resolution_check)
-        batch_row.addStretch(1)
+        batch_row.addWidget(self.result_overlay_check)
 
         # 퀵 매수 버튼 — 누르면 그 매수로 바로 연속 생성 (V4.5의 Quick Generation)
         self.quick_buttons: list[QPushButton] = []
@@ -564,6 +616,19 @@ class MainWindow(QMainWindow):
 
         # Gallery View — save_dir 기반 썸네일 그리드
         self._gallery_view: GalleryView | None = None
+
+        # 이미지 정보 창 — 모드리스라 하나만 띄워 두고 파일만 갈아 끼운다
+        self._image_info_dialog: ImageInfoDialog | None = None
+
+        # 프롬프트/캐릭터 슬롯에 이미지를 놓으면 경로를 붙이지 않고 이미지 정보를 연다
+        self.prompt_tabs.image_dropped.connect(self.open_image_info)
+        self.character_prompts.slot_added.connect(self._connect_slot_image_drop)
+        for slot in self.character_prompts.slots:
+            self._connect_slot_image_drop(slot)
+
+    def _connect_slot_image_drop(self, slot: CharacterSlot) -> None:
+        """캐릭터 슬롯 입력창에 놓은 이미지도 메인 프롬프트와 똑같이 다룬다."""
+        slot.tabs.image_dropped.connect(self.open_image_info)
 
     def _refresh_tag_completer(self) -> None:
         """설정된 경로(비어 있으면 내장 DB)로 태그 DB를 다시 읽고 드롭다운을 붙인다 (Req 7.3).
@@ -631,6 +696,7 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
             self._gallery_view.reuse_requested.connect(self._on_gallery_reuse)
+            self._gallery_view.settings_reused.connect(self.apply_reusable)
             self._gallery_view.setWindowTitle(self._i18n.get_text("menu.gallery_view"))
             self._gallery_view.setMinimumSize(600, 400)
 
@@ -644,73 +710,88 @@ class MainWindow(QMainWindow):
         """Gallery에서 Reuse Settings 요청 시 기존 apply_reusable로 위임."""
         self.open_image_info(path)
 
-    # ── M3: WD14 Auto-Tag ────────────────────────────────
+    # ── NAI 프롬프트 어시스턴트 (WD 태거 + LM Studio 통합) ──
 
-    def _on_open_wd14(self) -> None:
-        """WD14 Auto-Tag 다이얼로그를 연다.
+    def _on_open_assistant(self) -> None:
+        """통합 프롬프트 어시스턴트 창을 연다.
 
-        모델과 태그 CSV는 옵션 → 태그에서 지정한 폴더(`wd14_dir`)에서, 거기서 고른
-        모델(`wd14_model`)을 우선해 찾는다 (기본 폴더는 데이터 폴더의 `wd14/`).
-        파일 이름은 받은 곳마다 다르므로 폴더 안을 훑는다 —
-        `core.wd14_tagger.resolve_model_files` 참고.
+        LM Studio(`lmstudio`)를 쓸 수 없으면 창을 여는 대신 이유를 알린다. WD 태거는
+        런타임/모델이 없어도 창은 열되(다른 모드는 쓸 수 있으므로) WD 모드만 잠근다.
+        """
+        from ..core.llm.lmstudio_client import LMStudioConfig
+        from ..core.llm.lmstudio_client import runtime_error as llm_runtime_error
+
+        tr = self._i18n.get_text
+
+        failure = llm_runtime_error()
+        if failure:
+            logger.warning("LM Studio runtime unavailable: %s", failure)
+            QMessageBox.information(
+                self, tr("menu.prompt_assistant"), tr("lmstudio.err_not_installed", failure)
+            )
+            return
+
+        from .assistant_dialog import AssistantDialog
+
+        cfg = self._settings.lmstudio
+        config = LMStudioConfig(
+            host=cfg.host,
+            model=cfg.model,
+            timeout=cfg.timeout_seconds,
+            style=cfg.default_style,
+            system_prompt=cfg.system_prompt,
+        )
+        factory, reason = self._wd_tagger_factory()
+        dialog = AssistantDialog(
+            config=config,
+            i18n=self._i18n,
+            wd_tagger_factory=factory,
+            wd_unavailable_reason=reason,
+            default_apply_mode=cfg.default_apply_mode,
+            default_style=cfg.default_style,
+            default_mode=cfg.default_mode,
+            default_length=cfg.default_length,
+            parent=self,
+        )
+        dialog.prompt_ready.connect(self._on_assistant_prompt_ready)
+        dialog.exec()
+
+    def _wd_tagger_factory(self):
+        """(factory, reason) 반환. WD를 쓸 수 있으면 태거를 만드는 콜러블, 아니면 (None, 이유).
+
+        태거 생성을 지연 콜러블로 넘기는 이유: 창을 열 때가 아니라 WD 모드에서 실제로
+        생성을 누를 때 ONNX 세션을 만들도록 해, LLM만 쓰는 사용자는 비용을 치르지 않는다.
         """
         from ..core.wd14_tagger import resolve_model_files, runtime_error
 
         tr = self._i18n.get_text
-
-        # onnxruntime을 쓸 수 없으면 창을 열어 봐야 아무것도 못 한다 — 이유를 그대로 알린다.
-        # (모델이 없는 것과 원인이 전혀 다르므로 안내도 따로 한다.)
         failure = runtime_error()
         if failure:
-            logger.warning("WD14 runtime unavailable: %s", failure)
-            QMessageBox.information(
-                self, tr("menu.wd14_auto_tag"), tr("errors.wd14_runtime_missing", failure)
-            )
-            return
-
-        from .wd14_dialog import WD14Dialog
+            return None, tr("errors.wd14_runtime_missing", failure)
 
         directory = self._settings.wd14_dir_path()
         model_path, tags_path = resolve_model_files(directory, self._settings.wd14_model)
-
         if model_path is None or tags_path is None:
             missing = "*.onnx" if model_path is None else "*.csv"
-            logger.warning("WD14 model files not found in %s (missing %s)", directory, missing)
-            QMessageBox.information(
-                self,
-                tr("menu.wd14_auto_tag"),
-                tr("errors.wd14_model_missing", missing, str(directory)),
+            return None, tr("errors.wd14_model_missing", missing, str(directory))
+
+        from ..core.wd14_tagger import WD14Tagger
+
+        return (lambda: WD14Tagger(model_path=model_path, tags_path=tags_path)), ""
+
+    def _on_assistant_prompt_ready(self, prompt: str, negative: str, mode: str) -> None:
+        """생성된 프롬프트를 프롬프트/네거티브 칸에 반영한다 (mode: append|replace)."""
+        from ..core.llm.prompt_apply import apply_generated_prompt
+
+        if prompt:
+            self.prompt_edit.setPlainText(
+                apply_generated_prompt(self.prompt_edit.toPlainText(), prompt, mode)
             )
-            return
-
-        try:
-            from ..core.wd14_tagger import WD14Tagger
-
-            tagger = WD14Tagger(model_path=model_path, tags_path=tags_path)
-        except Exception:
-            logger.warning("WD14 tagger could not be initialized")
-            QMessageBox.information(
-                self,
-                tr("menu.wd14_auto_tag"),
-                tr("errors.wd14_model_missing", "*.onnx", str(directory)),
+        if negative:
+            self.negative_edit.setPlainText(
+                apply_generated_prompt(self.negative_edit.toPlainText(), negative, mode)
             )
-            return
-
-        dialog = WD14Dialog(tagger=tagger, i18n=self._i18n, parent=self)
-        dialog.tags_selected.connect(self._on_wd14_tags_selected)
-        dialog.exec()
-
-    def _on_wd14_tags_selected(self, tags: list[str]) -> None:
-        """WD14에서 선택된 태그를 현재 포커스된 프롬프트 필드에 추가."""
-        from ..core.wd14_tagger import append_tags_to_prompt
-
-        # 현재 포커스된 프롬프트 필드 결정 (기본: main prompt)
-        target = self.prompt_edit
-        if self.negative_edit.hasFocus():
-            target = self.negative_edit
-
-        current = target.toPlainText()
-        target.setPlainText(append_tags_to_prompt(current, tags))
+            self.prompt_tabs.show_negative()
 
     # ── 컴파일러 (자연어 → 구조화 프롬프트) ────────────────
 
@@ -970,6 +1051,20 @@ class MainWindow(QMainWindow):
         if visible and self._splitter.sizes()[1] == 0:
             self._splitter.setSizes(list(SPLITTER_SIZES))
 
+    def _on_narrow_panel_toggled(self, narrow: bool) -> None:
+        """입력 패널을 최소 폭으로 접거나, 접기 직전 폭으로 되돌린다 (F9)."""
+        sizes = self._splitter.sizes()
+        total = sum(sizes)
+        if narrow:
+            self._wide_splitter_sizes = list(sizes)
+            self._splitter.setSizes([LEFT_PANEL_MIN_WIDTH, max(0, total - LEFT_PANEL_MIN_WIDTH)])
+            return
+        restored = self._wide_splitter_sizes or list(SPLITTER_SIZES)
+        self._wide_splitter_sizes = None
+        # 창 크기가 그사이 바뀌었을 수 있으므로 저장해 둔 비율로 되돌린다.
+        scale = total / max(1, sum(restored))
+        self._splitter.setSizes([max(1, round(size * scale)) for size in restored])
+
     def reset_layout(self) -> None:
         """창 크기와 분할 비율을 기본값으로 되돌린다 (패널을 잃어버렸을 때 복구용).
 
@@ -978,11 +1073,14 @@ class MainWindow(QMainWindow):
         """
         self.result_panel_action.setChecked(True)
         self.result_panel.setVisible(True)
+        self._wide_splitter_sizes = None
+        self.narrow_panel_action.setChecked(False)
         if self.isMaximized() or self.isFullScreen():
             self.showNormal()
         self.resize(*WINDOW_SIZE)
         self._splitter.setSizes(list(SPLITTER_SIZES))
         self.ai_section.set_expanded(False)
+        self.character_prompts.set_position_panel_expanded(True)
 
     def target_size(self) -> tuple[int, int]:
         """실제로 생성될 크기 — i2i/인페인팅/강화면 원본 이미지가 정한다."""
@@ -1181,6 +1279,7 @@ class MainWindow(QMainWindow):
             self._settings.show_image_source and self.image_source_action.isEnabled()
         )
         self.enhance_action.setChecked(self._settings.show_enhance and self.enhance_action.isEnabled())
+        self.result_overlay_action.setChecked(self._settings.show_result_overlay)
         self.measure_credit_action.setChecked(self._settings.measure_credit)
         self._apply_prompts()
         self._apply_prompt_font()
@@ -1233,6 +1332,9 @@ class MainWindow(QMainWindow):
         """현재 위젯 상태를 설정 객체로 (종료 시 영속화용)."""
         self._save_splitters()
         self._save_window_geometry()
+        # 이 메서드는 이벤트 루프가 끝난 뒤에 불린다 — Qt가 주기적으로 돌려 주는
+        # 자동 flush를 더는 기대할 수 없으므로 여기서 직접 내려쓴다.
+        self._qsettings.sync()
         s = self._settings
         g = s.generation
         g.model = self.model_combo.currentData()
@@ -1250,6 +1352,7 @@ class MainWindow(QMainWindow):
         s.batch.random_resolution = self.random_resolution_check.isChecked()
         s.show_image_source = self.image_source_action.isChecked()
         s.show_enhance = self.enhance_action.isChecked()
+        s.show_result_overlay = self.result_overlay_action.isChecked()
         s.measure_credit = self.measure_credit_action.isChecked()
         p = s.prompts
         p.prompt = self.prompt_edit.toPlainText()
@@ -1311,6 +1414,7 @@ class MainWindow(QMainWindow):
             s.show_image_source and self.image_source_action.isEnabled()
         )
         self.enhance_action.setChecked(s.show_enhance and self.enhance_action.isEnabled())
+        self.result_overlay_action.setChecked(s.show_result_overlay)
         self.measure_credit_action.setChecked(s.measure_credit)  # Req 8.8
         self._refresh_tag_completer()  # Req 7.3
         self._apply_prompt_font()
@@ -1337,6 +1441,9 @@ class MainWindow(QMainWindow):
         ):
             signal.connect(self._refresh_section_summaries)
         self.ai_section.toggled.connect(lambda on: self._on_section_toggled("ai_settings_expanded", on))
+        self.character_prompts.position_section.toggled.connect(
+            lambda on: self._on_section_toggled("position_panel_expanded", on)
+        )
 
     def _compose_ai_summary(self) -> str:
         """접힌 `AI 설정` 섹션에 보일 한 줄 요약 (Req 11.6)."""
@@ -1363,6 +1470,7 @@ class MainWindow(QMainWindow):
     def _apply_section_states(self) -> None:
         """`settings.ui`에 저장된 펼침 상태를 섹션에 적용한다 (Req 12.2)."""
         self.ai_section.set_expanded(self._settings.ui.ai_settings_expanded)
+        self.character_prompts.set_position_panel_expanded(self._settings.ui.position_panel_expanded)
 
     def _show_option_notices(self, keys: tuple[str, ...]) -> None:
         """옵션 페이지가 낸 안내 문구를 한 번에 보여 준다 (Req 2.6)."""
@@ -1489,23 +1597,30 @@ class MainWindow(QMainWindow):
             self.status_label.setText(tr("statusbar.before_login"))
 
     def _on_open_image_info(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            self._i18n.get_text("image_info.open"),
-            self._settings.save_dir,
-            "Images (*.png *.webp)",
-        )
-        if path:
-            self.open_image_info(path)
+        """메뉴에서 연다 — 파일 선택 창을 먼저 띄우지 않는다.
+
+        V4와 같은 흐름이다: 창부터 뜨고, 그 안에서 파일 열기 버튼을 누르거나
+        이미지를 끌어다 놓는다. 창은 모드리스라 메인 창을 막지 않는다.
+        """
+        self._show_image_info()
 
     def open_image_info(self, path: str) -> ImageInfoDialog:
         """PNG의 생성 정보를 보여주고, 사용자가 수락하면 설정을 UI에 적용한다."""
         from pathlib import Path as _Path
 
-        dialog = ImageInfoDialog(self._i18n, self)
-        dialog.settings_selected.connect(self.apply_reusable)
+        dialog = self._show_image_info()
         dialog.load_file(_Path(path))
-        dialog.exec()
+        return dialog
+
+    def _show_image_info(self) -> ImageInfoDialog:
+        """이미지 정보 창을 띄우고 돌려준다 (없으면 만들고, 있으면 앞으로 가져온다)."""
+        if self._image_info_dialog is None:
+            self._image_info_dialog = ImageInfoDialog(self._i18n, self)
+            self._image_info_dialog.settings_selected.connect(self.apply_reusable)
+        dialog = self._image_info_dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
         return dialog
 
     def apply_reusable(self, s: ReusableSettings) -> None:
@@ -1691,7 +1806,9 @@ class MainWindow(QMainWindow):
         self._start_job(job)
 
     def _on_generate_once(self) -> None:
-        self._start_job(self.build_job(count=1))
+        job = self._resolve_duplicate(self.build_job(count=1))
+        if job is not None:
+            self._start_job(job)
 
     def _on_generate_auto(self) -> None:
         self._start_auto(self.count_spin.value())
@@ -1717,13 +1834,47 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("errors.title"), tr("errors.fixed_seed_batch"))
             self.status_label.setText(tr("errors.fixed_seed_batch"))
             return
-        self._start_job(self.build_job(count=count))
+        job = self._resolve_duplicate(self.build_job(count=count))
+        if job is not None:
+            self._start_job(job)
+
+    def _resolve_duplicate(self, job: GenerationJob) -> GenerationJob | None:
+        """직전에 완성한 이미지와 요청이 완전히 같으면 옵션대로 처리한다.
+
+        메타데이터를 끌어다 놓으면 시드까지 그대로 복원되므로, 그 상태에서 생성을 두 번
+        누르면 같은 이미지에 크레딧을 두 번 쓴다. `batch.duplicate_action`이
+        "그대로 생성 / 시드 자동 랜덤(기본) / 경고 후 중단" 중 무엇을 할지 정한다.
+
+        같은 요청이라도 결과가 달라지는 경우는 건드리지 않는다 — 시드 랜덤이 켜져 있거나
+        (`job.randomize_seed`), 프롬프트에 와일드카드·랜덤 문법이 들어 있을 때.
+
+        반환값은 시작할 잡 — None이면 생성하지 않는다.
+        """
+        action = duplicate_action(self._settings.batch.duplicate_action)
+        if action == "generate" or job.randomize_seed:
+            return job
+        if job.request != self._last_completed_request:
+            return job
+        if _has_dynamic_prompt(job.request):
+            return job
+
+        tr = self._i18n.get_text
+        if action == "block":
+            QMessageBox.warning(self, tr("errors.title"), tr("errors.duplicate_generation"))
+            self.status_label.setText(tr("errors.duplicate_generation"))
+            return None
+        # 시드는 서비스의 랜덤 시드와 같은 범위에서 뽑는다 (generation_service._next_request).
+        seed = random.randint(1, 2**32 - 1)
+        self.seed_edit.setText(str(seed))  # 화면에도 실제로 쓰인 시드가 남아야 한다
+        self.status_label.setText(tr("statusbar.duplicate_seed_changed", seed))
+        return dataclasses.replace(job, request=job.request.with_seed(seed))
 
     def _start_job(self, job: GenerationJob) -> None:
         try:
             self._service.start(job)
         except RuntimeError:
             return  # 이미 실행 중 — 버튼 비활성화가 정상이면 도달하지 않음
+        self._running_request = job.request
         self._set_running(True)
         # 첫 ImageStarted가 오기 전에도 즉시 반응을 보여준다
         self.status_label.setText(self._i18n.get_text("statusbar.generating"))
@@ -1850,6 +2001,9 @@ class MainWindow(QMainWindow):
         elif isinstance(event, ImageRetrying):
             self.status_label.setText(tr("statusbar.auto_error_wait", int(event.wait_seconds)))
         elif isinstance(event, ImageCompleted):
+            self._last_completed_request = self._running_request
+            self._overlay_request = event.request
+            self._refresh_result_overlay()
             self._show_image(event.path)
             # 저장 위치를 바로 확인할 수 있게 파일명 표시 + 전체 경로 툴팁
             self.status_label.setToolTip(event.path)
@@ -1936,6 +2090,53 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(tr("statusbar.job_stopped", self._settings_batch_completed))
             else:
                 self.status_label.setText(tr("statusbar.job_finished", self._settings_batch_completed))
+
+    # ── 결과 프롬프트 오버레이 (V4의 "프롬프트 결과 표시") ──────
+
+    def _wire_result_overlay_toggle(self) -> None:
+        """생성 바의 체크박스와 보기 메뉴 항목을 서로 따라가게 한다.
+
+        `setChecked`는 값이 그대로면 시그널을 내지 않으므로 두 방향으로 이어도 되돌이가
+        생기지 않는다. 상태의 출처는 액션 하나뿐이다 — 저장·복원도 액션만 본다.
+        """
+        self.result_overlay_check.toggled.connect(self.result_overlay_action.setChecked)
+        self.result_overlay_action.toggled.connect(self.result_overlay_check.setChecked)
+        self.result_overlay_check.setChecked(self.result_overlay_action.isChecked())
+
+    def _on_result_overlay_toggled(self, on: bool) -> None:
+        self._refresh_result_overlay()
+        self.result_overlay.set_active(on)
+
+    def _result_labels(self) -> ResultLabels:
+        """오버레이가 쓰는 라벨을 지금 언어로 채운다 (core는 i18n을 모른다)."""
+        tr = self._i18n.get_text
+        return ResultLabels(
+            prompt=tr("image_info.field_prompt"),
+            negative=tr("image_info.field_negative"),
+            character_n=tr("ui.character_n"),  # "캐릭터 {}" — core가 번호를 format으로 넣는다
+            character_negative=tr("ui.undesired_content"),
+            position_auto=tr("ui.position_auto"),
+            model=tr("image_info.field_model"),
+            size=tr("image_info.field_size"),
+            seed=tr("image_info.field_seed"),
+            steps=tr("image_info.field_steps"),
+            scale=tr("image_info.field_scale"),
+            rescale=tr("result.field_rescale"),
+            sampler=tr("image_info.field_sampler"),
+            scheduler=tr("result.field_scheduler"),
+        )
+
+    def _refresh_result_overlay(self) -> None:
+        """오버레이 내용을 마지막 결과로 다시 만든다 (생성 직후·언어 전환 후)."""
+        request = self._overlay_request
+        if request is None:
+            self.result_overlay.setPlainText(self._i18n.get_text("result.overlay_waiting"))
+            return
+        self.result_overlay.setPlainText(
+            compose_result_summary(
+                request, self._result_labels(), model_name=get_spec(request.model).api_name
+            )
+        )
 
     def _show_image(self, path: str) -> None:
         pixmap = QPixmap(path)
@@ -2111,15 +2312,19 @@ class MainWindow(QMainWindow):
         self.options_action.setText(tr("ui.options_menu"))
         self.view_menu.setTitle(tr("menu.view"))
         self.result_panel_action.setText(tr("menu.toggle_panel"))
+        self.narrow_panel_action.setText(tr("menu.narrow_panel"))
         self.reset_layout_action.setText(tr("menu.reset_layout"))
         self.image_source_action.setText(tr("image_source.menu"))
         self.enhance_action.setText(tr("enhance.menu"))
+        self.result_overlay_action.setText(tr("result.overlay_toggle"))
+        self.result_overlay_check.setText(tr("result.overlay_toggle"))
+        self.result_overlay_check.setToolTip(tr("result.overlay_toggle_hint"))
         self.tools_menu.setTitle(tr("menu.tools"))
         self.log_action.setText(tr("logs.menu"))
         self.measure_credit_action.setText(tr("logs.measure_credit"))
         self.measure_credit_action.setToolTip(tr("logs.measure_credit_hint"))
         # M3: WD14 / Presets / Gallery actions
-        self.wd14_action.setText(tr("menu.wd14_auto_tag"))
+        self.assistant_action.setText(tr("menu.prompt_assistant"))
         self.presets_action.setText(tr("menu.presets"))
         self.compiler_action.setText(tr("menu.prompt_compiler"))
         self.gallery_action.setText(tr("menu.gallery_view"))
@@ -2134,6 +2339,7 @@ class MainWindow(QMainWindow):
             self.preview_label.setText(f"{tr('result.no_image')}\n\n{tr('image_info.drop_hint')}")
         if not self.status_label.text():
             self.status_label.setText(tr("statusbar.idle"))
+        self._refresh_result_overlay()  # 오버레이 본문도 바뀐 언어로 다시 만든다
 
     _job_total: int | None = None
     _is_running: bool = False

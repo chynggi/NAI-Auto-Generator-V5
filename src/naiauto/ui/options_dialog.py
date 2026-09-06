@@ -74,6 +74,7 @@ NAV_ORDER: tuple[str, ...] = (
     "interface",
     "prompt_ai",
     "tags",
+    "llm",
     "log",
 )
 
@@ -104,8 +105,10 @@ OWNED_FIELDS: tuple[str, ...] = (
     "debug_logging",
     "show_image_source",
     "show_enhance",
+    "show_result_overlay",
     "check_updates_on_start",
     "measure_credit",
+    "lmstudio",
     "batch.count",
     "batch.delay_seconds",
     "batch.quick_counts",

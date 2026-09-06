@@ -22,10 +22,13 @@
       "gallery": "プロンプトマネージャー(Prompt Manager)",
       "gallery_view": "ギャラリー",
       "wd14_auto_tag": "WD14 自動タグ付け...",
+      "prompt_gen": "自然言語プロンプト生成 (LM Studio)...",
+      "prompt_assistant": "NAI プロンプトアシスタント...",
       "presets": "プリセット...",
       "preset_applied": "プリセットを適用しました。",
       "prompt_compiler": "自然言語プロンプトコンパイラ...",
-      "accounts": "APIアカウント管理(Accounts)..."
+      "accounts": "APIアカウント管理(Accounts)...",
+      "narrow_panel": "入力パネルを狭く"
     },
     "statusbar": {
       "before_login": "ログインが必要です。",
@@ -43,7 +46,8 @@
       "job_stopped": "停止 ({}枚生成)",
       "job_error": "エラーで中断: {}",
       "by_settings_progress": "設定別連続生成中 ({}/{}) - {}",
-      "by_settings_progress_inf": "設定別連続生成中 ({}枚) - {}"
+      "by_settings_progress_inf": "設定別連続生成中 ({}枚) - {}",
+      "duplicate_seed_changed": "直前の生成と条件が同じため、シードを {} に変更しました。"
     },
     "status": {
       "tags_reloaded": "タグ自動補完が再読み込みされました。"
@@ -91,6 +95,7 @@
       "uc_preset": "ネガティブプリセット:",
       "quality_tags": "クオリティタグを自動追加",
       "undesired_content": "ネガティブ",
+      "position_panel": "位置指定",
       "position_hint": "マーカーをドラッグしてキャラクターの位置を指定します。キャンバスの比率は現在の生成解像度に合わせて表示されます。",
       "position_auto": "自動",
       "summary_ai": "ステップ {0} · PG {1} · シード {2} · {3}",
@@ -98,7 +103,8 @@
       "section_expanded": "展開",
       "section_collapsed": "折りたたみ",
       "options_menu": "オプション...",
-      "manual_position": "手動位置指定"
+      "manual_position": "手動位置指定",
+      "toggle_slot": "スロットを折りたたむ / 展開"
     },
     "image_options": {
       "title": "画像オプション",
@@ -210,7 +216,11 @@
       "save_image_short": "保存",
       "prompt_title": "結果プロンプト",
       "overlay_toggle": "プロンプト表示",
-      "overlay_toggle_short": "表示"
+      "overlay_toggle_short": "表示",
+      "field_rescale": "Rescale",
+      "field_scheduler": "ノイズスケジュール",
+      "overlay_waiting": "生成すると、その画像のプロンプトと設定がここに表示されます。",
+      "overlay_toggle_hint": "生成したばかりの画像のプロンプトと設定を結果画像に重ねて表示します (F8)。ワイルドカードやアーティスト組み合わせを展開した後の、実際に送信した値です。"
     },
     "dialogs": {
       "login_title": "NAI API ログイン",
@@ -292,7 +302,8 @@
       "autogenerate_error": "画像の生成に問題がありました。\n\n{0}",
       "fixed_seed_batch": "連続生成にはランダムシードが必要です。シードの「ランダム」を有効にするか、生成枚数を1にしてください。",
       "wd14_model_missing": "WD14 モデルが見つかりません({} がありません)。\n\n{}\n\nオプション → タグでモデルフォルダを指定し、「モデルをダウンロード」を押してください。",
-      "wd14_runtime_missing": "WD14 自動タグ付けを利用できません。\n\nonnxruntime を読み込めませんでした:\n{}\n\nソースから実行している場合は `pip install -e .`（または `pip install onnxruntime numpy`）を実行してください。\n配布版（exe）なら v0.6.7 以降に同梱されています。"
+      "wd14_runtime_missing": "WD14 自動タグ付けを利用できません。\n\nonnxruntime を読み込めませんでした:\n{}\n\nソースから実行している場合は `pip install -e .`（または `pip install onnxruntime numpy`）を実行してください。\n配布版（exe）なら v0.6.7 以降に同梱されています。",
+      "duplicate_generation": "直前の生成とプロンプト・シード・解像度が完全に同じです。シードを変えるか、シードの「ランダム」をオンにしてから生成してください。"
     },
     "connection": {
       "server": "サーバー:",
@@ -488,7 +499,24 @@
       "wd14_download_failed": "モデルをダウンロードできませんでした。",
       "wd14_installed": "{} — インストール済み。ツール → WD14 自動タグ付けでこのモデルを使います。",
       "wd14_not_installed": "このモデルはまだフォルダにありません。「モデルをダウンロード」を押すか、すでに持っているフォルダを上で指定してください(v3 モデルは約 400MB)。",
-      "wd14_runtime_missing": "⚠ onnxruntime を利用できないためタグ付けが動きません（{}）。ソース実行なら `pip install -e .`、配布版なら v0.6.7 以降を入手してください。モデルのダウンロードは可能です。"
+      "wd14_runtime_missing": "⚠ onnxruntime を利用できないためタグ付けが動きません（{}）。ソース実行なら `pip install -e .`、配布版なら v0.6.7 以降を入手してください。モデルのダウンロードは可能です。",
+      "llm_host": "LM Studio サーバー (host:port)",
+      "llm_test": "接続テスト",
+      "llm_model_hint": "モデルはプロンプト生成ウィンドウで選びます(サーバーに読み込み済みの一覧から)。ここには保存しないため、サーバーが不要にモデルを複数読み込むことがありません。",
+      "llm_timeout": "応答待ち時間(秒)",
+      "llm_style": "既定の出力スタイル",
+      "llm_style_natural": "自然言語プロンプト",
+      "llm_style_danbooru": "Danbooru タグ",
+      "llm_apply_mode": "既定の反映方法",
+      "llm_apply_append": "プロンプトに追記",
+      "llm_apply_replace": "プロンプトを上書き",
+      "llm_system_prompt": "システムプロンプト(空欄で既定値)",
+      "llm_system_prompt_hint": "どのようなプロンプトを作るか LLM に指示する文です。空欄にすると NovelAI V5 用の既定の指示を使います。",
+      "llm_not_installed": "LM Studio の Python SDK を利用できません（{}）。ソース実行なら `pip install lmstudio` でインストールしてください。",
+      "llm_connect_ok": "{} の LM Studio サーバーに接続しました。",
+      "llm_connect_failed": "{} に接続できませんでした。LM Studio アプリを起動しサーバーを開始しているか、アドレスが正しいか確認してください。",
+      "llm_models_found": "ロード済みモデルを {} 個見つけました。",
+      "llm_no_models": "ロード済みのモデルがありません。まず LM Studio でモデルをロードしてください。"
     },
     "resolution": {
       "title": "解像度",
@@ -518,6 +546,8 @@
       "prompt_ai_desc": "自然言語プロンプトコンパイラのLLMプロバイダーと既定の動作を設定します。",
       "tags": "タグ補完",
       "tags_desc": "タグ自動補完ファイルのパスを設定します。",
+      "llm": "プロンプト生成 (LLM)",
+      "llm_desc": "自然言語プロンプト生成に使う LM Studio のローカル LLM 接続を設定します。",
       "log": "ログ設定",
       "log_desc": "デバッグモードとログ設定を管理します。"
     },
@@ -629,10 +659,15 @@
     "batch": {
       "count": "生成枚数 (0=無限):",
       "delay": "間隔(秒):",
-      "random_resolution": "1枚ごとに解像度をランダム化 (縦/横/正方形)",
+      "random_resolution": "解像度ランダム",
       "random_resolution_tooltip": "生成ごとにWide/Square/Portraitのいずれかをランダムに選んで解像度を変更します。i2i/インペイント中は元画像サイズが優先されるため適用されません。",
       "random_settings_order": "セット別連続生成で設定ファイルをランダム順に",
-      "random_settings_order_hint": "オフなら選んだ順に巡回します。オンにすると毎回ランダムに選びます(同じファイルが連続することはありません)。"
+      "random_settings_order_hint": "オフなら選んだ順に巡回します。オンにすると毎回ランダムに選びます(同じファイルが連続することはありません)。",
+      "duplicate_action": "同じ条件で再生成するとき",
+      "duplicate_action_generate": "そのまま生成（同じ画像がもう1枚）",
+      "duplicate_action_random_seed": "シードを自動でランダムに変更",
+      "duplicate_action_block": "警告して生成しない",
+      "duplicate_action_hint": "直前に生成した画像とプロンプト・シード・解像度などがすべて同じときの動作です。メタデータを読み込むとシードも復元されるため、生成を2回押すと同じ画像にクレジットを2回使うことになります。シードが「ランダム」の場合やプロンプトにワイルドカード・ランダム構文がある場合は毎回結果が変わるため適用されません。"
     },
     "image_info": {
       "title": "画像情報",
@@ -657,6 +692,7 @@
       "no_file": "ファイルを選択してください",
       "open_file": "ファイルを開く",
       "apply_selected": "選択項目を適用",
+      "copy_selected": "選択項目をコピー",
       "zoom_hint": "スクロール: ズーム、ダブルクリック: リセット"
     },
     "image_source": {
@@ -754,6 +790,94 @@
       "copy_tooltip": "チェックしたタグを、プロンプトに入れるときと同じ形式(カンマ区切り)でクリップボードにコピーします。ウィンドウは閉じません。",
       "copied": "タグ {} 個をクリップボードにコピーしました。",
       "copy_nothing": "コピーするタグがありません。入れたいタグにチェックしてください。"
+    },
+    "lmstudio": {
+      "title": "プロンプト生成 (LM Studio)",
+      "tab_text": "テキスト",
+      "tab_image": "画像",
+      "model": "モデル",
+      "refresh": "更新",
+      "models_found": "読み込み済みモデル {} 個",
+      "no_models": "読み込み済みのモデルがありません。まず LM Studio でモデルを読み込んでください。",
+      "stop": "停止",
+      "stopping": "停止しています...",
+      "stopped": "生成を停止しました。",
+      "style": "出力スタイル",
+      "style_natural": "自然言語プロンプト",
+      "style_danbooru": "Danbooru タグ",
+      "text_placeholder": "単語や文を入力してください。例：『雨の降る都市の夜、傘を差した少女』",
+      "drop_here": "画像をここにドロップするか\n「参照」で選択してください\n(ビジョンモデル(VLM)が必要です)",
+      "browse": "参照...",
+      "clear_image": "画像をクリア",
+      "choose_image": "画像を選択",
+      "image_filter": "画像 (*.png *.jpg *.jpeg *.webp);;すべてのファイル (*)",
+      "image_loaded": "画像を読み込みました: {}",
+      "image_open_failed": "画像を開けませんでした: {}",
+      "generate": "生成",
+      "generating": "LM Studio でプロンプトを生成中...",
+      "need_input": "テキストを入力するか画像を追加してください。",
+      "result": "生成されたプロンプト(編集可能)",
+      "result_placeholder": "ここに生成されたプロンプトが表示されます。",
+      "result_negative": "ネガティブ(任意)",
+      "done": "プロンプトを生成しました。",
+      "empty_result": "モデルがプロンプトを返しませんでした。再試行するか入力を変えてください。",
+      "apply_append": "プロンプトに追記",
+      "apply_replace": "プロンプトを上書き",
+      "copy": "📋 コピー",
+      "copied": "プロンプトをクリップボードにコピーしました。",
+      "err_not_installed": "LM Studio の Python SDK を利用できません（{}）。ソース実行なら `pip install lmstudio` でインストールしてください。",
+      "err_connection": "LM Studio サーバーに接続できませんでした。アプリを起動しサーバーを開始しているか、オプション → プロンプト生成 のアドレスが正しいか確認してください。({})",
+      "err_no_model": "LM Studio にロード済みのモデルがありません。先にモデルをロードしてください。({})",
+      "err_vision": "このモデルは画像を理解できません。ビジョンモデル(VLM、例: Qwen VL)をロードするか、テキストのみで生成してください。({})",
+      "err_timeout": "応答が時間内に返りませんでした。より小さいモデルを使うか、オプションで待ち時間を延ばしてください。({})",
+      "err_response": "プロンプト生成中にエラーが発生しました: {}"
+    },
+    "assistant": {
+      "title": "NAI プロンプトアシスタント",
+      "text_input": "テキスト入力",
+      "text_placeholder": "単語・文、または画像に適用する指示を入力してください。",
+      "image_input": "画像入力",
+      "drop_here": "画像をここにドロップするか\n「参照」で選択してください",
+      "browse": "参照...",
+      "clear_image": "画像をクリア",
+      "choose_image": "画像を選択",
+      "image_filter": "画像 (*.png *.jpg *.jpeg *.webp *.bmp);;すべてのファイル (*)",
+      "image_loaded": "画像を読み込みました: {}",
+      "image_open_failed": "画像を開けませんでした: {}",
+      "mode_wd": "WD タガー: WD モデルで Danbooru タグを生成します。",
+      "mode_llm_tagger": "LLM タガー: LM Studio のモデルで自然言語または Danbooru タグを生成します。",
+      "mode_llm_assistant": "LLM アシスタント: テキストと画像を同時に使い、望む内容を生成します。",
+      "model": "モデル",
+      "refresh": "更新",
+      "models_found": "読み込み済みモデル {} 個",
+      "no_models": "読み込み済みのモデルがありません。まず LM Studio でモデルを読み込んでください。",
+      "style": "出力スタイル",
+      "style_natural": "自然言語プロンプト",
+      "style_danbooru": "Danbooru タグ",
+      "length": "出力の長さ",
+      "length_short": "短め",
+      "length_medium": "普通",
+      "length_long": "長め",
+      "generate": "生成",
+      "generate_wd": "タグ生成",
+      "generate_assistant": "アシスタント結果を作成",
+      "stop": "停止",
+      "stopping": "停止しています...",
+      "stopped": "生成を停止しました。",
+      "generating": "生成中...",
+      "need_input": "テキストを入力するか画像を追加してください。",
+      "need_image": "WD タガーには画像が必要です。右側に画像を追加してください。",
+      "need_image_assistant": "アシスタントモードには変形する画像が必要です。右側に画像を追加してください。",
+      "wd_unavailable": "WD タガーを利用できません。オプション → タグでモデルを準備してください。",
+      "result": "生成されたプロンプト(編集可能)",
+      "result_placeholder": "ここに生成されたプロンプトが表示されます。",
+      "result_negative": "ネガティブ(任意)",
+      "done": "完了しました。",
+      "empty_result": "結果が空です。再試行するか入力を変えてください。",
+      "apply_append": "プロンプトに追記",
+      "apply_replace": "プロンプトを上書き",
+      "copy": "📋 コピー",
+      "copied": "結果をクリップボードにコピーしました。"
     }
   }
 }

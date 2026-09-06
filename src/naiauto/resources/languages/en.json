@@ -22,10 +22,13 @@
       "gallery": "Prompt Manager",
       "gallery_view": "Gallery",
       "wd14_auto_tag": "WD14 Auto-Tag...",
+      "prompt_gen": "Natural-language Prompt (LM Studio)...",
+      "prompt_assistant": "NAI Prompt Assistant...",
       "presets": "Presets...",
       "preset_applied": "Preset loaded.",
       "prompt_compiler": "Natural Language Prompt Compiler...",
-      "accounts": "Manage API Accounts..."
+      "accounts": "Manage API Accounts...",
+      "narrow_panel": "Narrow input panel"
     },
     "statusbar": {
       "before_login": "Login required.",
@@ -43,7 +46,8 @@
       "job_stopped": "Stopped ({} generated)",
       "job_error": "Aborted: {}",
       "by_settings_progress": "Generating by settings ({}/{}) - {}",
-      "by_settings_progress_inf": "Generating by settings ({}) - {}"
+      "by_settings_progress_inf": "Generating by settings ({}) - {}",
+      "duplicate_seed_changed": "Same settings as the last generation — seed changed to {}."
     },
     "status": {
       "tags_reloaded": "Tag completion reloaded successfully."
@@ -91,6 +95,7 @@
       "uc_preset": "UC Preset:",
       "quality_tags": "Append quality tags",
       "undesired_content": "Undesired Content",
+      "position_panel": "Position",
       "position_hint": "Drag the markers to place each character. The canvas matches the current generation resolution.",
       "position_auto": "Auto",
       "summary_ai": "Steps {0} · PG {1} · Seed {2} · {3}",
@@ -98,7 +103,8 @@
       "section_expanded": "expanded",
       "section_collapsed": "collapsed",
       "options_menu": "Options...",
-      "manual_position": "Manual Position"
+      "manual_position": "Manual Position",
+      "toggle_slot": "Collapse / expand slot"
     },
     "image_options": {
       "title": "Image Options",
@@ -210,7 +216,11 @@
       "save_image_short": "Save",
       "prompt_title": "Result Prompt",
       "overlay_toggle": "Show Prompt",
-      "overlay_toggle_short": "Result"
+      "overlay_toggle_short": "Result",
+      "field_rescale": "Rescale",
+      "field_scheduler": "Noise schedule",
+      "overlay_waiting": "Once you generate an image, its prompt and settings appear here.",
+      "overlay_toggle_hint": "Overlays the prompt and settings of the image you just generated on the result view (F8). Shows the values actually sent, after wildcards and artist combos are expanded."
     },
     "dialogs": {
       "login_title": "NAI API Login",
@@ -292,7 +302,8 @@
       "autogenerate_error": "There was a problem generating the image.\n\n{0}",
       "fixed_seed_batch": "Auto generation requires a random seed. Enable the seed 'Random' option or set the count to 1.",
       "wd14_model_missing": "WD14 model not found (no {}).\n\n{}\n\nSet the model folder under Options → Tags and press \"Download model\".",
-      "wd14_runtime_missing": "WD14 auto-tagging is unavailable.\n\nonnxruntime could not be imported:\n{}\n\nRunning from source? Install it with `pip install -e .` (or `pip install onnxruntime numpy`).\nUsing the packaged build? v0.6.7 and newer ship it."
+      "wd14_runtime_missing": "WD14 auto-tagging is unavailable.\n\nonnxruntime could not be imported:\n{}\n\nRunning from source? Install it with `pip install -e .` (or `pip install onnxruntime numpy`).\nUsing the packaged build? v0.6.7 and newer ship it.",
+      "duplicate_generation": "Prompt, seed and resolution are identical to the previous generation. Change the seed or turn on \"Random\" and try again."
     },
     "connection": {
       "server": "Server:",
@@ -479,7 +490,24 @@
       "wd14_download_failed": "Could not download the model.",
       "wd14_installed": "{} — installed. Tools → WD14 Auto-Tag uses this model.",
       "wd14_not_installed": "This model is not in the folder yet. Press \"Download model\", or point the folder above at one you already have (v3 models are about 400 MB).",
-      "wd14_runtime_missing": "⚠ Tagging cannot run — onnxruntime is unusable ({}). From source, run `pip install -e .`; for the packaged build, get v0.6.7 or newer. Downloading a model still works."
+      "wd14_runtime_missing": "⚠ Tagging cannot run — onnxruntime is unusable ({}). From source, run `pip install -e .`; for the packaged build, get v0.6.7 or newer. Downloading a model still works.",
+      "llm_host": "LM Studio server (host:port)",
+      "llm_test": "Test connection",
+      "llm_model_hint": "The model is chosen in the prompt-generation window (from the list already loaded on the server). It is not saved here, so the server won't load extra models unnecessarily.",
+      "llm_timeout": "Response timeout (s)",
+      "llm_style": "Default output style",
+      "llm_style_natural": "Natural-language prompt",
+      "llm_style_danbooru": "Danbooru tags",
+      "llm_apply_mode": "Default apply mode",
+      "llm_apply_append": "Append to prompt",
+      "llm_apply_replace": "Replace prompt",
+      "llm_system_prompt": "System prompt (blank = default)",
+      "llm_system_prompt_hint": "Instructs the LLM on what kind of prompt to write. Leave blank to use the built-in instructions for NovelAI V5.",
+      "llm_not_installed": "The LM Studio Python SDK is unavailable ({}). Running from source? Install it with `pip install lmstudio`.",
+      "llm_connect_ok": "Connected to the LM Studio server at {}.",
+      "llm_connect_failed": "Could not connect to {}. Make sure the LM Studio app is open with its server started, and the address is correct.",
+      "llm_models_found": "Found {} loaded model(s).",
+      "llm_no_models": "No models are loaded. Load a model in LM Studio first."
     },
     "resolution": {
       "title": "Resolution",
@@ -518,6 +546,8 @@
       "prompt_ai_desc": "Configure the LLM provider and default behavior of the natural language prompt compiler.",
       "tags": "Tag Completion",
       "tags_desc": "Set the path for the tag auto-completion file.",
+      "llm": "Prompt Generation (LLM)",
+      "llm_desc": "Configure the LM Studio local LLM used for natural-language prompt generation.",
       "log": "Logging",
       "log_desc": "Manage debug mode and logging settings."
     },
@@ -629,10 +659,15 @@
     "batch": {
       "count": "Count (0=infinite):",
       "delay": "Delay (sec):",
-      "random_resolution": "Random resolution per image (Wide/Square/Portrait)",
+      "random_resolution": "Random resolution",
       "random_resolution_tooltip": "Picks a random Wide/Square/Portrait resolution for each generated image. Ignored while i2i/inpainting locks the size to the source image.",
       "random_settings_order": "Pick settings files in random order (per-settings batch)",
-      "random_settings_order_hint": "Off: cycle through the files in the order you picked them. On: pick one at random for each image (never the same file twice in a row)."
+      "random_settings_order_hint": "Off: cycle through the files in the order you picked them. On: pick one at random for each image (never the same file twice in a row).",
+      "duplicate_action": "When regenerating with identical settings",
+      "duplicate_action_generate": "Generate anyway (same image again)",
+      "duplicate_action_random_seed": "Randomize the seed automatically",
+      "duplicate_action_block": "Warn and do not generate",
+      "duplicate_action_hint": "Applies when every value — prompt, seed, resolution and the rest — matches the image you just generated. Loading metadata restores the seed too, so pressing Generate twice spends credit on the same image. It does not apply when the seed is set to \"Random\" or the prompt contains wildcards or random syntax, since those differ every run."
     },
     "image_info": {
       "title": "Image Info",
@@ -657,6 +692,7 @@
       "no_file": "Select a file",
       "open_file": "Open File",
       "apply_selected": "Apply Selected",
+      "copy_selected": "Copy selected",
       "zoom_hint": "Scroll: zoom, Double-click: reset"
     },
     "image_source": {
@@ -754,6 +790,94 @@
       "copy_tooltip": "Copies the checked tags to the clipboard, comma-separated — the same text that goes into the prompt. The window stays open.",
       "copied": "Copied {} tags to the clipboard.",
       "copy_nothing": "Nothing to copy — tick the tags you want first."
+    },
+    "lmstudio": {
+      "title": "Prompt Generation (LM Studio)",
+      "tab_text": "Text",
+      "tab_image": "Image",
+      "model": "Model",
+      "refresh": "Refresh",
+      "models_found": "{} model(s) loaded",
+      "no_models": "No models are loaded. Load a model in LM Studio first.",
+      "stop": "Stop",
+      "stopping": "Stopping...",
+      "stopped": "Generation stopped.",
+      "style": "Output style",
+      "style_natural": "Natural-language prompt",
+      "style_danbooru": "Danbooru tags",
+      "text_placeholder": "Enter words or a sentence. e.g. 'a girl with an umbrella on a rainy city night'",
+      "drop_here": "Drop an image here\nor use 'Browse'\n(a vision model / VLM is required)",
+      "browse": "Browse...",
+      "clear_image": "Clear image",
+      "choose_image": "Choose image",
+      "image_filter": "Images (*.png *.jpg *.jpeg *.webp);;All files (*)",
+      "image_loaded": "Image loaded: {}",
+      "image_open_failed": "Could not open the image: {}",
+      "generate": "Generate",
+      "generating": "Generating a prompt via LM Studio...",
+      "need_input": "Enter text or add an image first.",
+      "result": "Generated prompt (editable)",
+      "result_placeholder": "The generated prompt will appear here.",
+      "result_negative": "Negative (optional)",
+      "done": "Prompt generated.",
+      "empty_result": "The model returned no prompt. Try again or change the input.",
+      "apply_append": "Append to prompt",
+      "apply_replace": "Replace prompt",
+      "copy": "📋 Copy",
+      "copied": "Copied the prompt to the clipboard.",
+      "err_not_installed": "The LM Studio Python SDK is unavailable ({}). Running from source? Install it with `pip install lmstudio`.",
+      "err_connection": "Could not connect to the LM Studio server. Make sure the app is open with its server started, and check the address under Options → Prompt Generation. ({})",
+      "err_no_model": "No model is loaded in LM Studio. Load a model there first. ({})",
+      "err_vision": "This model cannot read images. Load a vision model (VLM, e.g. Qwen VL) or generate from text only. ({})",
+      "err_timeout": "The response timed out. Try a smaller model or raise the timeout in Options. ({})",
+      "err_response": "Prompt generation failed: {}"
+    },
+    "assistant": {
+      "title": "NAI Prompt Assistant",
+      "text_input": "Text input",
+      "text_placeholder": "Enter words/sentences, or an instruction to apply to the image.",
+      "image_input": "Image input",
+      "drop_here": "Drop an image here\nor use 'Browse'",
+      "browse": "Browse...",
+      "clear_image": "Clear image",
+      "choose_image": "Choose image",
+      "image_filter": "Images (*.png *.jpg *.jpeg *.webp *.bmp);;All files (*)",
+      "image_loaded": "Image loaded: {}",
+      "image_open_failed": "Could not open the image: {}",
+      "mode_wd": "WD tagger: generate Danbooru tags from a WD model.",
+      "mode_llm_tagger": "LLM tagger: generate a natural-language or Danbooru prompt via an LM Studio model.",
+      "mode_llm_assistant": "LLM assistant: use text and image together to produce the result you want.",
+      "model": "Model",
+      "refresh": "Refresh",
+      "models_found": "{} model(s) loaded",
+      "no_models": "No models are loaded. Load a model in LM Studio first.",
+      "style": "Output style",
+      "style_natural": "Natural-language prompt",
+      "style_danbooru": "Danbooru tags",
+      "length": "Output length",
+      "length_short": "Short",
+      "length_medium": "Medium",
+      "length_long": "Long",
+      "generate": "Generate",
+      "generate_wd": "Generate tags",
+      "generate_assistant": "Write assistant result",
+      "stop": "Stop",
+      "stopping": "Stopping...",
+      "stopped": "Generation stopped.",
+      "generating": "Generating...",
+      "need_input": "Enter text or add an image first.",
+      "need_image": "WD tagger needs an image. Add one on the right.",
+      "need_image_assistant": "Assistant mode needs an image to transform. Add one on the right.",
+      "wd_unavailable": "WD tagger is unavailable. Prepare a model under Options -> Tags.",
+      "result": "Generated prompt (editable)",
+      "result_placeholder": "The generated prompt will appear here.",
+      "result_negative": "Negative (optional)",
+      "done": "Done.",
+      "empty_result": "Empty result. Try again or change the input.",
+      "apply_append": "Append to prompt",
+      "apply_replace": "Replace prompt",
+      "copy": "📋 Copy",
+      "copied": "Copied the result to the clipboard."
     }
   }
 }
