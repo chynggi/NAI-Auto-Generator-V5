@@ -6,8 +6,10 @@ import pytest
 
 from naiauto.core.prompt.errors import TargetPresetError
 from naiauto.core.prompt.targets import (
+    LORA_REGISTRY_FILENAME,
     NOVELAI_PRESET,
     NOVELAI_TARGET_ID,
+    LoraEntry,
     TargetPreset,
     builtin_targets_dir,
     find_target,
@@ -84,6 +86,9 @@ def test_parse_preset_applies_defaults():
         {"id": "bad_nl", "name": "x", "natural_language": "nope"},
         {"id": "bad_mask", "name": "x", "mask_size": [1, 2, 3]},
         {"id": "bad_list", "name": "x", "quality_prefix": "not a list"},
+        {"id": "bad_weight", "name": "x", "weight_syntax": "nope"},
+        {"id": "bad_bool_mask", "name": "x", "mask_size": [True, 1216]},
+        {"id": "bad_item", "name": "x", "quality_prefix": ["ok", 5]},
     ],
 )
 def test_parse_preset_rejects_invalid(data):
@@ -129,3 +134,49 @@ def test_find_target_falls_back_to_novelai():
     assert find_target(presets, "illustrious").id == "illustrious"
     assert find_target(presets, "no-such-target") is NOVELAI_PRESET
     assert find_target(presets, "") is NOVELAI_PRESET
+
+
+def test_unreadable_preset_dir_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """읽을 수 없는 폴더가 앱 기동을 막지 않는다."""
+    from pathlib import Path
+
+    def _boom(self, pattern):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "glob", _boom)
+    presets = load_target_presets(tmp_path)
+    assert presets[0] is NOVELAI_PRESET  # 내장 로드도 같은 이유로 비지만, 앱은 뜬다
+
+
+def test_find_target_warns_on_unknown_id(caplog):
+    presets = load_target_presets(None)
+    with caplog.at_level("WARNING"):
+        find_target(presets, "no-such-target")
+    assert "no-such-target" in caplog.text
+
+
+def test_find_target_quiet_on_normal_lookups(caplog):
+    presets = load_target_presets(None)
+    with caplog.at_level("WARNING"):
+        find_target(presets, "")
+        find_target(presets, "novelai")
+    assert caplog.text == ""
+
+
+def test_empty_user_dir_falls_back_to_builtin(tmp_path):
+    ids = {p.id for p in load_target_presets(tmp_path)}
+    assert "illustrious" in ids
+
+
+def test_lora_registry_file_is_not_read_as_preset(tmp_path, caplog):
+    (tmp_path / LORA_REGISTRY_FILENAME).write_text(
+        json.dumps({"kafka": {"file": "k.safetensors"}}), encoding="utf-8"
+    )
+    with caplog.at_level("WARNING"):
+        presets = load_target_presets(tmp_path)
+    assert all(p.id != "loras" for p in presets)
+    assert "loras.json" not in caplog.text  # 건너뛴 것이지 깨진 것이 아니다
+
+
+def test_lora_entry_stem_drops_extension():
+    assert LoraEntry(id="k", file="kafka_illustrious.safetensors").stem == "kafka_illustrious"

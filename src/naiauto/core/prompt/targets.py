@@ -41,9 +41,10 @@ NOVELAI_TARGET_ID = "novelai"
 #: 사용자 프리셋 폴더에서 읽는 LoRA 레지스트리 파일 이름.
 LORA_REGISTRY_FILENAME = "loras.json"
 
-#: ``flatten``/``natural_language``의 유효값.
+#: ``flatten``/``natural_language``/``weight_syntax``의 유효값.
 _FLATTEN_VALUES = ("sequential", "couple_mask")
 _NL_VALUES = ("drop", "append")
+_WEIGHT_SYNTAX_VALUES = ("none", "a1111")
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,7 @@ def _mask_size(data: dict) -> tuple[int, int] | None:
     if (
         not isinstance(value, list)
         or len(value) != 2
-        or any(not isinstance(v, int) or v <= 0 for v in value)
+        or any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in value)
     ):
         raise TargetPresetError("'mask_size' must be [width, height] of positive ints")
     return (value[0], value[1])
@@ -127,6 +128,11 @@ def parse_preset(data: dict) -> TargetPreset:
         raise TargetPresetError(
             f"'natural_language' must be one of {_NL_VALUES}, got {natural_language!r}"
         )
+    weight_syntax = str(data.get("weight_syntax", "none"))
+    if weight_syntax not in _WEIGHT_SYNTAX_VALUES:
+        raise TargetPresetError(
+            f"'weight_syntax' must be one of {_WEIGHT_SYNTAX_VALUES}, got {weight_syntax!r}"
+        )
     return TargetPreset(
         id=preset_id,
         name=str(data.get("name", "")).strip() or preset_id,
@@ -134,7 +140,7 @@ def parse_preset(data: dict) -> TargetPreset:
         quality_prefix=_str_tuple(data, "quality_prefix"),
         quality_suffix=_str_tuple(data, "quality_suffix"),
         default_negative=_str_tuple(data, "default_negative"),
-        weight_syntax=str(data.get("weight_syntax", "none")),
+        weight_syntax=weight_syntax,
         flatten=flatten,
         position_tags=bool(data.get("position_tags", True)),
         natural_language=natural_language,
@@ -146,9 +152,14 @@ def parse_preset(data: dict) -> TargetPreset:
 def _load_dir(directory: Path) -> list[TargetPreset]:
     """폴더의 ``*.json``을 프리셋으로 읽는다. 깨진 파일은 건너뛴다."""
     presets: list[TargetPreset] = []
-    if not directory.is_dir():
+    try:
+        if not directory.is_dir():
+            return presets
+        paths = sorted(directory.glob("*.json"))
+    except OSError as exc:
+        logger.warning("cannot read target preset directory %s: %s", directory, exc)
         return presets
-    for path in sorted(directory.glob("*.json")):
+    for path in paths:
         if path.name == LORA_REGISTRY_FILENAME:
             continue
         try:
