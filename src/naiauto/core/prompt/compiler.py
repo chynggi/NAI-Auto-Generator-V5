@@ -16,9 +16,11 @@ formatter(문자열 조립)를 순서대로 묶어 최종 ``CompiledPrompt``를 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from types import SimpleNamespace
 
+from naiauto.core.prompt.emitters import emit_couple_mask, emit_sequential, relationship_tags
 from naiauto.core.prompt.errors import CompilerEmptyResultError, CompilerError
 from naiauto.core.prompt.formatter import PromptFormatter
 from naiauto.core.prompt.llm import LLMProvider
@@ -36,6 +38,13 @@ from naiauto.core.prompt.schema import (
     RelationshipPrompt,
     ScenePrompt,
     TagRef,
+)
+from naiauto.core.prompt.targets import (
+    LoraEntry,
+    TargetPreset,
+    find_target,
+    load_lora_registry,
+    load_target_presets,
 )
 from naiauto.core.settings.credentials import load_credential
 from naiauto.core.tag_completer import resolve_database_path
@@ -61,6 +70,8 @@ class PromptCompiler:
         use_resolver: bool = True,
         retriever: TagRetriever | None = None,
         server_manager=None,
+        target_presets: tuple[TargetPreset, ...] | None = None,
+        lora_registry: Mapping[str, LoraEntry] | None = None,
     ) -> None:
         self._parser = SceneParser(provider, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         self._resolver = resolver
@@ -71,9 +82,31 @@ class PromptCompiler:
         self._retriever = retriever
         #: 자동 기동된 llama-server 프로세스 관리자 (close()에서 종료).
         self._server_manager = server_manager
+        #: 사용 가능한 출력 타깃 프리셋 (UI가 콤보를 채울 때도 읽는다).
+        #: None이면 novelai + 내장 프리셋(resources/prompt_targets)을 읽는다 —
+        #: build_compiler를 거치지 않고 직접 만든 컴파일러도 로컬 타깃을 쓸 수 있어야 한다.
+        #: 기본값 자리에서 부르지 않는 건 import 시점 I/O를 피하기 위해서다.
+        self.target_presets = (
+            load_target_presets(None) if target_presets is None else target_presets
+        )
+        #: 사용자 LoRA 레지스트리 (id → LoraEntry). UI가 드롭다운을 채울 때 읽는다.
+        self.lora_registry = dict(lora_registry or {})
 
-    def compile(self, text: str, *, mode: str = "hybrid") -> CompiledPrompt:
-        """자연어 → CompiledPrompt. 빈 입력은 CompilerEmptyResultError."""
+    def compile(
+        self,
+        text: str,
+        *,
+        mode: str = "hybrid",
+        target: str = "novelai",
+        character_loras: Mapping[str, LoraEntry] | None = None,
+        resolution: tuple[int, int] | None = None,
+    ) -> CompiledPrompt:
+        """자연어 → CompiledPrompt. 빈 입력은 CompilerEmptyResultError.
+
+        ``target``은 출력 대상 프리셋 id다. 모르는 id면 novelai로 폴백한다.
+        ``character_loras``는 캐릭터 id → LoRA 배정(로컬 타깃에서만 쓰인다).
+        ``resolution``은 couple_mask의 MASK_SIZE에 쓰인다.
+        """
         if mode not in MODE_TAGS:
             raise ValueError(f"invalid mode: {mode!r} (expected one of {MODE_TAGS})")
         if not text.strip():
@@ -84,9 +117,18 @@ class PromptCompiler:
             candidate_tags=tags,
             translated_text=translations.get(text, ""),
         )
-        return self._assemble(raw, mode)
+        return self._assemble(raw, mode, target, character_loras or {}, resolution)
 
-    def modify(self, existing_prompt: str, instruction: str, *, mode: str = "hybrid") -> CompiledPrompt:
+    def modify(
+        self,
+        existing_prompt: str,
+        instruction: str,
+        *,
+        mode: str = "hybrid",
+        target: str = "novelai",
+        character_loras: Mapping[str, LoraEntry] | None = None,
+        resolution: tuple[int, int] | None = None,
+    ) -> CompiledPrompt:
         """기존 프롬프트 수정 — wildcard/artist 토큰 보존 (스펙 §51, §52).
 
         1. 기존 프롬프트에서 보존 토큰(``__dynamic__``/``{...}``)을 추출해
@@ -106,7 +148,7 @@ class PromptCompiler:
             candidate_tags=tags,
             translated_text=translations.get(instruction, ""),
         )
-        result = self._assemble(raw, mode)
+        result = self._assemble(raw, mode, target, character_loras or {}, resolution)
         # [Minor #5] 보존 토큰 확인은 부분 문자열이 아니라 태그 목록 세그먼트 단위로 —
         # "1girl"이 "1girls"의 부분 문자열로 오인되는 일이 없도록 한다.
         tag_part = result.base_prompt.split("\n\n", 1)[0]
@@ -154,7 +196,14 @@ class PromptCompiler:
                     tags.append(tag)
         return tuple(tags), translations
 
-    def _assemble(self, raw: LLMStructuredPrompt, mode: str) -> CompiledPrompt:
+    def _assemble(
+        self,
+        raw: LLMStructuredPrompt,
+        mode: str,
+        target: str = "novelai",
+        character_loras: Mapping[str, LoraEntry] | None = None,
+        resolution: tuple[int, int] | None = None,
+    ) -> CompiledPrompt:
         """LLM 구조화 출력(LLMStructuredPrompt) → 최종 CompiledPrompt."""
         unresolved: list[str] = []
 
@@ -215,17 +264,41 @@ class PromptCompiler:
             style=raw.style,
         )
 
-        # 7/8. 문자열 조립 + 캐릭터별 최종 prompt_text (merge 레이어가 사용)
-        base, negative = self._formatter.format(
-            scene=scene,
-            characters=tuple(characters),
-            relationships=tuple(relationships),
-            negative_tags=tuple(neg_refs),
-            mode=mode,
-        )
-        characters = [
-            replace(c, prompt_text=self._formatter.character_prompt_text(c, mode)) for c in characters
-        ]
+        # 7/8. 문자열 조립 — 타깃에 따라 NovelAI 포맷터 또는 로컬 emitter.
+        preset = find_target(self.target_presets, target)
+        emitter_warnings: list[str] = []
+        if preset.kind == "novelai":
+            base, negative = self._formatter.format(
+                scene=scene,
+                characters=tuple(characters),
+                relationships=tuple(relationships),
+                negative_tags=tuple(neg_refs),
+                mode=mode,
+            )
+            characters = [
+                replace(c, prompt_text=self._formatter.character_prompt_text(c, mode))
+                for c in characters
+            ]
+        else:
+            # emitter는 순수 문자열 함수라 경고 채널이 없다 — 관계 경고는
+            # 여기서 다시 뽑아 CompiledPrompt.warnings로 올린다.
+            draft = CompiledPrompt(
+                base_prompt="",
+                negative_prompt=", ".join(ref.tag for ref in neg_refs),
+                scene=scene,
+                characters=tuple(characters),
+                relationships=tuple(relationships),
+                mode=mode,
+                warnings=(),
+                unresolved=(),
+                target=preset.id,
+            )
+            loras = character_loras or {}
+            if preset.flatten == "couple_mask":
+                base, negative = emit_couple_mask(draft, preset, loras, resolution=resolution)
+            else:
+                base, negative = emit_sequential(draft, preset, loras)
+            _, emitter_warnings = relationship_tags(tuple(relationships))
 
         # 9. 빈 결과: scene 태그도 캐릭터도 없으면 의미 없는 프롬프트.
         #    캐릭터가 0명이면 scene만 있어도 유효 (배경 프롬프트).
@@ -233,7 +306,7 @@ class PromptCompiler:
             raise CompilerEmptyResultError("no scene tags or characters in compile result")
 
         # 10. warnings = 관계 경고 + unresolved 요약 1줄
-        warnings = list(rel_warnings)
+        warnings = list(rel_warnings) + emitter_warnings
         if unresolved:
             warnings.append(
                 f"{len(unresolved)} unresolved concept(s) were not added to the final prompt: "
@@ -249,6 +322,7 @@ class PromptCompiler:
             mode=mode,
             warnings=tuple(warnings),
             unresolved=tuple(unresolved),
+            target=preset.id,
         )
 
     def close(self) -> None:
@@ -362,6 +436,10 @@ def build_compiler(settings) -> PromptCompiler:
         except CompilerError:
             server_manager = None  # 폴백 — 컴파일러는 연결 오류로 동작
 
+    presets_dir = getattr(comp, "target_presets_dir", "") or ""
+    target_presets = load_target_presets(presets_dir)
+    lora_registry = load_lora_registry(presets_dir)
+
     formatter = PromptFormatter(
         preserve_natural_language=bool(getattr(comp, "preserve_natural_language", True)),
         relationship_style=getattr(comp, "relationship_style", "natural"),
@@ -377,4 +455,6 @@ def build_compiler(settings) -> PromptCompiler:
         use_resolver=use_resolver,
         retriever=retriever,
         server_manager=server_manager,
+        target_presets=target_presets,
+        lora_registry=lora_registry,
     )
