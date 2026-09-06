@@ -198,6 +198,7 @@ class CompilerSettings(BaseModel):
     #: 사용자 타깃 프리셋 + loras.json이 든 폴더. 빈 값이면 내장 프리셋만 쓴다.
     target_presets_dir: str = ""
 
+
 class LMStudioSettings(BaseModel):
     """자연어 프롬프트 생성용 로컬 LLM(LM Studio) 연결 설정.
 

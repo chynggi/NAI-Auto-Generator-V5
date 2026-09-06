@@ -223,8 +223,7 @@ class PromptAiPage(OptionsPage):
         # 앱은 로드된 것만 보여 준다 (loras.json과 같은 정책).
         self.target_label = QLabel(self)
         self.target_combo = QComboBox(self)
-        for preset in load_target_presets(None):
-            self.target_combo.addItem(preset.name, preset.id)
+        self._fill_target_combo(load_target_presets(None))
         compiler_form.addRow(self.target_label, self.target_combo)
 
         self.presets_dir_label = QLabel(self)
@@ -427,6 +426,21 @@ class PromptAiPage(OptionsPage):
         if path:
             self.server_path_edit.setText(path)
 
+    def _fill_target_combo(self, presets) -> None:
+        """타깃 콤보를 채운다 — NovelAI 라벨은 다이얼로그와 같은 i18n 키를 쓴다.
+
+        프리셋의 ``name``을 그대로 쓰면 novelai만 번역되지 않아, 같은 타깃이
+        옵션과 변환 창에서 다르게 보일 수 있다.
+        """
+        self.target_combo.clear()
+        for preset in presets:
+            label = (
+                self._i18n.get_text("compiler.target_novelai")
+                if preset.id == NOVELAI_TARGET_ID
+                else preset.name
+            )
+            self.target_combo.addItem(label, preset.id)
+
     def _browse_presets_dir(self) -> None:
         """타깃 프리셋 + loras.json이 든 폴더를 고른다."""
         tr = self._i18n.get_text
@@ -444,9 +458,7 @@ class PromptAiPage(OptionsPage):
         directory = self.presets_dir_edit.text().strip()
         current = self.target_combo.currentData()
         self.target_combo.blockSignals(True)
-        self.target_combo.clear()
-        for preset in load_target_presets(directory):
-            self.target_combo.addItem(preset.name, preset.id)
+        self._fill_target_combo(load_target_presets(directory))
         index = self.target_combo.findData(current)
         self.target_combo.setCurrentIndex(index if index >= 0 else 0)
         self.target_combo.blockSignals(False)

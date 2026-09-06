@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from naiauto.core.prompt.compiler import PromptCompiler, build_compiler
-from naiauto.core.prompt.emitters import emit_couple_mask, emit_regional_json
+from naiauto.core.prompt.emitters import emit_couple_mask, emit_regional_json, emit_sequential
 from naiauto.core.prompt.errors import (
     CompilerAuthError,
     CompilerEmptyResultError,
@@ -770,6 +770,8 @@ class PromptCompilerDialog(QDialog):
             combo.currentIndexChanged.connect(
                 lambda _i, cid=char.id: self._on_lora_selected(cid)
             )
+            # 가중치만 바꿔도 결과가 달라진다 — 복원이 끝난 뒤 연결한다.
+            weight.valueChanged.connect(self._reemit_local)
 
             self._lora_layout.addWidget(row_widget)
             self._lora_combos[char.id] = combo
@@ -777,10 +779,41 @@ class PromptCompilerDialog(QDialog):
         self._update_lora_visibility()
 
     def _on_lora_selected(self, char_id: str) -> None:
-        """LoRA를 고르면 가중치를 레지스트리 기본값으로 맞춘다."""
+        """LoRA를 고르면 가중치를 레지스트리 기본값으로 맞추고 결과를 다시 뽑는다."""
         entry_id = self._lora_combos[char_id].currentData()
         entry = self._compiler.lora_registry.get(entry_id) if entry_id else None
-        self._lora_weights[char_id].setValue(entry.weight if entry else 1.0)
+        weight = self._lora_weights[char_id]
+        # 가중치를 바꾸면 valueChanged가 _reemit_local을 또 부른다 — 한 번만 뽑는다.
+        weight.blockSignals(True)
+        weight.setValue(entry.weight if entry else 1.0)
+        weight.blockSignals(False)
+        self._reemit_local()
+
+    def _reemit_local(self) -> None:
+        """LoRA 선택이 바뀌면 로컬 결과 전체를 다시 뽑는다.
+
+        LLM을 다시 타지 않는다 — emitter는 이미 확정된 ``CompiledPrompt``만
+        읽는 순수 함수라 재조립으로 충분하다. 프롬프트 탭까지 갱신하지 않으면
+        COUPLE MASK 탭에는 LoRA가 보이는데 정작 적용되는 프롬프트에는 빠지는
+        엇갈림이 생긴다 (적용 버튼은 프롬프트 탭을 읽는다).
+        """
+        compiled = self._compiled
+        if compiled is None or compiled.target == NOVELAI_TARGET_ID:
+            return
+        preset = find_target(self._compiler.target_presets, compiled.target)
+        loras = self._character_loras()
+        if preset.flatten == "couple_mask":
+            base, negative = emit_couple_mask(
+                compiled, preset, loras, resolution=self._resolution()
+            )
+        else:
+            base, negative = emit_sequential(compiled, preset, loras)
+        # 사용자가 손댄 편집 내용을 덮어쓰지만, LoRA 변경 자체가 프롬프트를
+        # 바꾸겠다는 명시적 요청이므로 반영하는 쪽이 맞다.
+        self._compiled = replace(compiled, base_prompt=base, negative_prompt=negative)
+        self._final_edit.setPlainText(base)
+        self._negative_edit.setPlainText(negative)
+        self._render_local_outputs(self._compiled)
 
     # ------------------------------------------------------------------
     # Apply (MainWindow가 의미를 결정 — 여기선 신호만 쏜다)

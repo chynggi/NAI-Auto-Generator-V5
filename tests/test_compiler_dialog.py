@@ -526,3 +526,60 @@ def test_history_restore_unknown_target_leaves_combo_alone(qapp, tmp_path):
     dialog._history_combo.setCurrentIndex(1)
     assert dialog.target_combo.currentData() == "novelai"
     dialog.close()
+
+
+# --- LoRA 선택과 결과 탭의 동기화 -------------------------------------------
+
+
+def test_selecting_lora_updates_prompt_tab_not_just_couple_tab(qapp, tmp_path):
+    """적용 버튼은 프롬프트 탭을 읽는다 — LoRA가 거기에도 반영돼야 한다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    assert "<lora:" not in dialog._final_edit.toPlainText()
+
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+
+    assert "<lora:kafka:0.8>" in dialog._final_edit.toPlainText()
+    assert "<lora:kafka:0.8>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_changing_lora_weight_updates_prompt_tab(qapp, tmp_path):
+    """가중치 스핀박스도 결과를 바꾼다 — 콤보만 연결하면 반쪽짜리다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    assert "<lora:kafka:0.8>" in dialog._final_edit.toPlainText()
+
+    dialog._lora_weights["c1"].setValue(0.5)
+
+    assert "<lora:kafka:0.5>" in dialog._final_edit.toPlainText()
+    assert "<lora:kafka:0.5>" in dialog._couple_edit.toPlainText()
+    dialog.close()
+
+
+def test_lora_change_keeps_apply_payload_in_sync(qapp, tmp_path):
+    """적용 시 나가는 프롬프트에 LoRA가 실제로 담긴다."""
+    received = []
+    dialog = _lora_dialog(tmp_path)
+    dialog.applied.connect(received.append)
+    dialog._compiled = _local_compiled()
+    dialog._render_preview(dialog._compiled)
+    dialog._lora_combos["c1"].setCurrentIndex(1)
+    dialog._on_apply("apply")
+    assert "<lora:kafka:0.8>" in received[0].prompt
+    assert received[0].characters == ()
+
+
+def test_lora_reemit_is_noop_on_novelai_target(qapp, tmp_path):
+    """NovelAI 결과는 emitter로 다시 뽑으면 안 된다 — 원본 그대로 남아야 한다."""
+    dialog = _lora_dialog(tmp_path)
+    dialog.target_combo.setCurrentIndex(dialog.target_combo.findData("novelai"))
+    dialog._compiled = _local_compiled(target="novelai")
+    dialog._render_preview(dialog._compiled)
+    before = dialog._final_edit.toPlainText()
+    dialog._reemit_local()
+    assert dialog._final_edit.toPlainText() == before
+    dialog.close()
