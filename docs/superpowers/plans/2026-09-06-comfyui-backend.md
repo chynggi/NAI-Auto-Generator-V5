@@ -1914,6 +1914,47 @@ def test_view_uses_temp_type(monkeypatch):
     assert "filename=a.png" in view_url
 
 
+def test_only_output_node_is_accepted(monkeypatch):
+    """PreviewImage가 아닌 노드도 executed를 낸다 — output_node만 받는다.
+
+    필터가 없으면 먼저 온 다른 노드의 이미지를 가져가 버린다.
+    """
+    other = json.dumps(
+        {
+            "type": "executed",
+            "data": {
+                "node": "8",
+                "prompt_id": PID,
+                "output": {"images": [{"filename": "other.png", "subfolder": "", "type": "temp"}]},
+            },
+        }
+    )
+    backend, calls = _backend(monkeypatch, frames=[other, EXECUTED])
+    backend.generate(REQ)
+    view_url = next(u for u in calls["get"] if "/view" in u)
+    assert "filename=a.png" in view_url
+
+
+def test_progress_is_forwarded(monkeypatch):
+    """샘플링 진행률은 콜백으로 흘러나간다 — UI 진행 바의 원천이다."""
+    progress = json.dumps({"type": "progress", "data": {"value": 3, "max": 20, "prompt_id": PID}})
+    seen = []
+    backend = ComfyUIBackend(
+        base_url="http://127.0.0.1:8188",
+        template=TEMPLATE,
+        model_slots={},
+        timeout=1.0,
+        on_progress=lambda value, maximum: seen.append((value, maximum)),
+    )
+    ws = _StubWS([progress, EXECUTED])
+    monkeypatch.setattr(backend, "_make_socket", lambda: ws)
+    monkeypatch.setattr(backend, "_new_prompt_id", lambda: PID)
+    monkeypatch.setattr(backend, "_post_json", lambda url, payload, **kw: {"prompt_id": PID})
+    monkeypatch.setattr(backend, "_get_bytes", lambda url, **kw: b"PNG")
+    backend.generate(REQ)
+    assert seen == [(3, 20)]
+
+
 def test_prompt_rejected_surfaces_node_errors(monkeypatch):
     node_errors = {"4": {"errors": [{"message": "value not in list"}]}}
 
