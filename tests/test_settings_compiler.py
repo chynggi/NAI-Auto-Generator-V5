@@ -37,3 +37,33 @@ def test_old_settings_migrate_with_defaults(tmp_path):
     assert loaded.language == "en"
     assert loaded.prompt_ai.provider == "openai_compatible"
     assert loaded.compiler.default_mode == "hybrid"
+
+
+def test_compiler_target_defaults():
+    from naiauto.core.settings.schema import AppSettings
+
+    settings = AppSettings()
+    assert settings.compiler.default_target == "novelai"
+    assert settings.compiler.target_presets_dir == ""
+
+
+def test_compiler_target_round_trips(tmp_path):
+    import json
+
+    from naiauto.core.settings.schema import AppSettings
+
+    settings = AppSettings()
+    settings.compiler.default_target = "illustrious"
+    settings.compiler.target_presets_dir = str(tmp_path)
+    restored = AppSettings.model_validate(json.loads(settings.model_dump_json()))
+    assert restored.compiler.default_target == "illustrious"
+    assert restored.compiler.target_presets_dir == str(tmp_path)
+
+
+def test_old_settings_without_target_still_load():
+    """기존 설정 파일(타깃 필드 없음)이 그대로 열려야 한다 — 마이그레이션 불필요."""
+    from naiauto.core.settings.schema import AppSettings
+
+    settings = AppSettings.model_validate({"compiler": {"default_mode": "tag"}})
+    assert settings.compiler.default_mode == "tag"
+    assert settings.compiler.default_target == "novelai"
