@@ -117,6 +117,8 @@ OWNED_FIELDS: tuple[str, ...] = (
     "ui",
     "prompt_ai",
     "compiler",
+    "generation_backend",
+    "comfyui",
 )
 
 __all__ = ["NAV_ORDER", "NAV_WIDTH", "OWNED_FIELDS", "OptionsDialog", "apply_draft"]

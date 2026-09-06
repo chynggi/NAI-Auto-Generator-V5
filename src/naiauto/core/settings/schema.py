@@ -222,6 +222,23 @@ class LMStudioSettings(BaseModel):
     default_length: str = "medium"
 
 
+class ComfyUISettings(BaseModel):
+    """로컬 ComfyUI 백엔드 설정 (스펙 §6.1).
+
+    ``model_slots``가 중첩 dict인 이유는 슬롯 이름과 개수가 템플릿마다 다르기
+    때문이다 — SDXL은 ``checkpoint`` 하나지만 Anima는 UNET+CLIP+VAE+터보 네 개다.
+    템플릿을 바꿔 가며 써도 각자의 선택이 남는다.
+    """
+
+    base_url: str = "http://127.0.0.1:8188"
+    template_id: str = "sdxl_basic"
+    #: 템플릿 id → {슬롯명: 모델 파일명}
+    model_slots: dict[str, dict[str, str]] = Field(default_factory=dict)
+    timeout_seconds: float = 300.0
+    #: 사용자 워크플로 템플릿 폴더 ("" = 내장만)
+    workflows_dir: str = ""
+
+
 class AppSettings(BaseModel):
     schema_version: int = CURRENT_SCHEMA_VERSION
     language: str = "ko"
@@ -252,6 +269,8 @@ class AppSettings(BaseModel):
     #: 결과 이미지 위에 그 장의 프롬프트를 겹쳐 보여 준다 (보기 메뉴 F8, V4의 '프롬프트 결과 표시')
     show_result_overlay: bool = False
     measure_credit: bool = False  # V5 크레딧 소모량 측정 로그 (도구 메뉴)
+    #: "novelai" | "comfyui" — 어느 백엔드로 생성할지 (스펙 §6.3)
+    generation_backend: str = "novelai"
     check_updates_on_start: bool = True  # 시작 시 새 버전 확인 (기타 메뉴에서 수동 확인도 가능)
     generation: GenerationDefaults = Field(default_factory=GenerationDefaults)
     batch: BatchSettings = Field(default_factory=BatchSettings)
@@ -262,6 +281,7 @@ class AppSettings(BaseModel):
     prompt_ai: PromptAISettings = Field(default_factory=PromptAISettings)
     compiler: CompilerSettings = Field(default_factory=CompilerSettings)
     lmstudio: LMStudioSettings = Field(default_factory=LMStudioSettings)
+    comfyui: ComfyUISettings = Field(default_factory=ComfyUISettings)
 
     def log_dir_path(self) -> Path:
         """설정된 로그 디렉터리. 빈 문자열이면 OS 표준 위치."""
