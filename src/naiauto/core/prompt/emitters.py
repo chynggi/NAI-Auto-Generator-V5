@@ -50,12 +50,14 @@ MUTUAL_RELATION_TAGS: dict[str, str] = {
     "facing": "facing another",
 }
 
-#: 중복 쉼표/공백 정리 ("tag ,, tag" → "tag, tag").
+#: 쉼표 앞뒤 공백을 ", "로 통일한다 (쉼표 연속 자체는 합치지 않는다).
 #: formatter._sanitize와 같은 규칙이지만 그쪽은 비공개 메서드라 여기 따로 둔다.
 _SANITIZE_RE = re.compile(r"\s*,\s*")
 
-#: position_hint에서 수평 토큰만 골라내기 위한 세로 토큰 목록.
-_VERTICAL_TOKENS = ("top", "bottom", "center")
+#: position_hint 토큰 중 수평 태그를 만들지 않는 것들. "top"/"bottom"은 세로축이라
+#: POSITION_TAGS에 없고, "center"는 POSITION_TAGS에 없는 게 의도(노이즈라 태그 없음)라
+#: 실수로 빠뜨린 게 아님을 명시하려고 여기 그대로 나열해 둔다.
+_NON_HORIZONTAL_TOKENS = ("top", "bottom", "center")
 
 
 @dataclass(frozen=True)
@@ -83,17 +85,21 @@ def relationship_tags(
     """(태그 목록, 경고 목록). 상호 관계 중 매핑된 것만 태그가 된다."""
     tags: list[str] = []
     warnings: list[str] = []
-    seen: set[str] = set()
+    seen_tags: set[str] = set()
+    seen_warnings: set[str] = set()
     for rel in relationships:
         tag = MUTUAL_RELATION_TAGS.get(rel.action) if rel.mutual else None
         if tag is None:
-            warnings.append(
-                f"relationship {rel.source}->{rel.target} ({rel.action}) has no local "
-                "tag equivalent and was dropped"
+            warning = (
+                f"The relationship between {rel.source} and {rel.target} ({rel.action}) "
+                "has no equivalent tag for this target and was left out of the prompt."
             )
+            if warning not in seen_warnings:
+                seen_warnings.add(warning)
+                warnings.append(warning)
             continue
-        if tag not in seen:
-            seen.add(tag)
+        if tag not in seen_tags:
+            seen_tags.add(tag)
             tags.append(tag)
     return tags, warnings
 
@@ -118,13 +124,18 @@ def character_regions(characters: tuple[CharacterPrompt, ...]) -> list[Character
 
 
 def lora_tags(loras: Mapping[str, LoraEntry]) -> list[str]:
-    """캐릭터별 LoRA 배정 → ``<lora:stem:weight>`` 목록 (파일 기준 중복 제거)."""
+    """캐릭터별 LoRA 배정 → ``<lora:stem:weight>`` 목록 (stem 기준 중복 제거).
+
+    ``file``이 아니라 ``stem``으로 중복을 없앤다 — A1111/ComfyUI는
+    ``<lora:name:w>``를 이름으로 찾으므로, 경로만 다르고 stem이 같은 두 파일도
+    태그로는 결국 하나로 뭉개진다. 두 번 넣어봐야 한 번보다 나을 게 없다.
+    """
     tags: list[str] = []
     seen: set[str] = set()
     for entry in loras.values():
-        if entry.file in seen:
+        if entry.stem in seen:
             continue
-        seen.add(entry.file)
+        seen.add(entry.stem)
         tags.append(f"<lora:{entry.stem}:{entry.weight:g}>")
     return tags
 
@@ -144,7 +155,7 @@ def _position_tag(char: CharacterPrompt, total: int, preset: TargetPreset) -> st
     if total < 2 or not preset.position_tags:
         return ""
     for token in char.position_hint.split():
-        if token in _VERTICAL_TOKENS:
+        if token in _NON_HORIZONTAL_TOKENS:
             continue
         tag = POSITION_TAGS.get(token)
         if tag:
@@ -188,7 +199,12 @@ def _style_tags(compiled: CompiledPrompt) -> list[str]:
 
 
 def _finalize(tags: list[str], preset: TargetPreset) -> str:
-    """태그 목록 → 최종 문자열 (언더스코어 치환 + 중복 쉼표 정리).
+    """태그 목록 → 최종 문자열 (언더스코어 치환 + 빈 태그 제거 + 쉼표 공백 정리).
+
+    빈 문자열은 버리고, 쉼표 앞뒤 공백을 ", "로 통일하고, 맨 앞뒤 쉼표/공백을
+    자른다. 쉼표가 연속된 경우("a ,, b")를 하나로 합치지는 않는다 — 자연어
+    문장(natural_language: "append")도 이 함수를 거치므로, 문장 속 쉼표 연속을
+    임의로 뭉개지 않기 위해서다.
 
     ``<lora:...>`` 태그는 치환에서 제외한다 — 파일명의 언더스코어를 공백으로
     바꾸면 LoRA를 못 찾는다 (``kafka_illustrious`` → ``kafka illustrious``).

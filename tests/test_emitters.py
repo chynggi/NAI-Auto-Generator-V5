@@ -3,6 +3,7 @@
 from naiauto.core.prompt.emitters import (
     MUTUAL_RELATION_TAGS,
     POSITION_TAGS,
+    _finalize,
     character_regions,
     lora_tags,
     negative_prompt,
@@ -116,6 +117,15 @@ def test_relationship_tags_deduplicates():
     assert tags == [MUTUAL_RELATION_TAGS["looking_at"]]
 
 
+def test_relationship_tags_deduplicates_identical_warnings():
+    rels = (
+        RelationshipPrompt(source="c1", target="c2", action="chasing", mutual=True),
+        RelationshipPrompt(source="c1", target="c2", action="chasing", mutual=True),
+    )
+    _, warnings = relationship_tags(rels)
+    assert len(warnings) == 1
+
+
 # --- 영역 좌표 -------------------------------------------------------------
 
 
@@ -141,8 +151,11 @@ def test_character_regions_missing_center_defaults_to_half_and_keeps_order():
 
 def test_character_regions_three_way_split():
     chars = (char("c1", ["a"], cx=0.15), char("c2", ["b"], cx=0.5), char("c3", ["c"], cx=0.85))
-    widths = [round(r.width, 4) for r in character_regions(chars)]
-    assert widths == [0.3333, 0.3333, 0.3333]
+    regions = character_regions(chars)
+    assert [round(r.width, 4) for r in regions] == [0.3333, 0.3333, 0.3333]
+    # 영역이 빈틈·겹침 없이 이어지고 오른쪽 끝에 닿는다.
+    assert [round(r.x, 4) for r in regions] == [0.0, 0.3333, 0.6667]
+    assert round(regions[-1].x + regions[-1].width, 4) == 1.0
 
 
 def test_character_regions_empty():
@@ -166,6 +179,13 @@ def test_lora_tags_empty_when_no_assignment():
     assert lora_tags({}) == []
 
 
+def test_lora_tags_deduplicates_same_stem_from_different_paths():
+    """A1111/ComfyUI는 <lora:name:w>를 이름으로 찾으므로 stem이 같으면 같은 태그다."""
+    a = LoraEntry(id="a", file="characters/kafka.safetensors", weight=0.8)
+    b = LoraEntry(id="b", file="outfits/kafka.safetensors", weight=0.5)
+    assert lora_tags({"c1": a, "c2": b}) == ["<lora:kafka:0.8>"]
+
+
 # --- 네거티브 --------------------------------------------------------------
 
 
@@ -183,3 +203,24 @@ def test_negative_prompt_deduplicates_keeping_order():
         PRESET,
     )
     assert result == "lowres, worst quality"
+
+
+# --- _finalize ---------------------------------------------------------------
+
+
+def test_finalize_replaces_underscores_but_spares_lora_tags():
+    tags = ["<lora:kafka_illustrious:0.8>", "silver_hair", "school_uniform"]
+    assert _finalize(tags, PRESET) == "<lora:kafka_illustrious:0.8>, silver hair, school uniform"
+
+
+def test_finalize_keeps_underscores_when_preset_disables_replacement():
+    preset = TargetPreset(id="p", name="P", underscore_to_space=False)
+    assert _finalize(["silver_hair"], preset) == "silver_hair"
+
+
+def test_finalize_drops_empty_tags():
+    assert _finalize(["a", "", "b"], PRESET) == "a, b"
+
+
+def test_finalize_normalises_whitespace_around_commas():
+    assert _finalize(["a ,  b"], PRESET) == "a, b"
