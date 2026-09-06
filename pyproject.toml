@@ -42,7 +42,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 naiauto = [
+    "resources/comfy_workflows/*.json",
     "resources/languages/*.json",
+    "resources/prompt_targets/*.json",
     "resources/tags/*.csv",
     "resources/tags/*.json",
     "resources/tags/*.txt",

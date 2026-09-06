@@ -59,6 +59,9 @@ class WorkflowTemplate:
     id: str
     name: str
     output_node: str
+    #: 원본 그래프. frozen 데이터클래스지만 이 dict 자체는 가변이고 템플릿마다
+    #: 하나뿐이다 — 값을 주입할 때는 반드시 깊은 복사를 먼저 해야 한다.
+    #: 얕은 복사(dict(...))는 중첩된 inputs를 공유해 원본을 오염시킨다.
     graph: dict
     slots: dict[str, str] = field(default_factory=dict)
     model_slots: dict[str, ModelSlot] = field(default_factory=dict)
@@ -78,10 +81,10 @@ def builtin_workflows_dir() -> Path:
 
 def _split_path(path: str, what: str) -> tuple[str, str]:
     """"3.seed" → ("3", "seed"). 형식이 아니면 ComfyTemplateError."""
-    node_id, sep, input_name = str(path).partition(".")
-    if not sep or not node_id or not input_name:
+    parts = str(path).split(".")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
         raise ComfyTemplateError(f"{what}: {path!r} must be '<node_id>.<input_name>'")
-    return node_id, input_name
+    return parts[0], parts[1]
 
 
 def _check_path(graph: dict, path: str, what: str) -> None:

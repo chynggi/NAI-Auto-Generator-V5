@@ -59,6 +59,7 @@ def test_parse_defaults():
         (lambda d: d.update(slots={"positive": "99.text"}), "슬롯 노드가 없음"),
         (lambda d: d.update(slots={"positive": "6.nope"}), "슬롯 입력이 없음"),
         (lambda d: d.update(slots={"positive": "6text"}), "슬롯 경로에 점이 없음"),
+        (lambda d: d.update(slots={"positive": "6.text.extra"}), "슬롯 경로에 점이 둘"),
         (
             lambda d: d.update(
                 model_slots={"c": {"path": "99.x", "from": "A.b"}}
@@ -68,6 +69,10 @@ def test_parse_defaults():
         (
             lambda d: d.update(model_slots={"c": {"path": "4.ckpt_name"}}),
             "모델 슬롯에 from 없음",
+        ),
+        (
+            lambda d: d.update(model_slots={"c": {"path": "4.ckpt_name", "from": "A.b.c"}}),
+            "model_slots.from에 점이 둘",
         ),
     ],
 )
@@ -84,6 +89,13 @@ def test_builtin_dir_exists():
 
 def test_load_workflows_reads_builtins():
     ids = {t.id for t in load_workflows()}
+    assert "sdxl_basic" in ids
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_blank_user_dir_uses_builtins_only(blank):
+    """빈 문자열이 Path('')=CWD가 되어 아무 json이나 읽는 일이 없어야 한다."""
+    ids = {t.id for t in load_workflows(blank)}
     assert "sdxl_basic" in ids
 
 
