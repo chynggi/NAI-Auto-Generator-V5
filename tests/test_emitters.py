@@ -5,6 +5,7 @@ from naiauto.core.prompt.emitters import (
     POSITION_TAGS,
     _finalize,
     character_regions,
+    emit_sequential,
     lora_tags,
     negative_prompt,
     relationship_tags,
@@ -224,3 +225,124 @@ def test_finalize_drops_empty_tags():
 
 def test_finalize_normalises_whitespace_around_commas():
     assert _finalize(["a ,  b"], PRESET) == "a, b"
+
+
+# --- emit_sequential -------------------------------------------------------
+
+
+def test_sequential_assembly_order():
+    result, _ = emit_sequential(
+        compiled(
+            scene_tags=("rain", "night", "alley"),
+            subjects=("girl", "girl"),
+            characters=(
+                char("c1", ["silver_hair"], hint="left", cx=0.30),
+                char("c2", ["black_hair"], hint="right", cx=0.70),
+            ),
+            relationships=(
+                RelationshipPrompt(source="c1", target="c2", action="hugging", mutual=True),
+            ),
+            camera="low angle shot, from below",
+        ),
+        PRESET,
+        {},
+    )
+    assert result == (
+        "masterpiece, best quality, 2girls, "
+        "on the left, silver hair, on the right, black hair, "
+        "rain, night, alley, hug, low angle shot, from below"
+    )
+
+
+def test_sequential_single_character_has_no_position_tag():
+    result, _ = emit_sequential(
+        compiled(
+            scene_tags=("alley",),
+            subjects=("girl",),
+            characters=(char("c1", ["silver_hair"], hint="left", cx=0.30),),
+        ),
+        PRESET,
+        {},
+    )
+    assert "on the left" not in result
+    assert "1girl" in result
+
+
+def test_sequential_no_characters_is_background_prompt():
+    result, _ = emit_sequential(compiled(scene_tags=("alley", "night")), PRESET, {})
+    assert result == "masterpiece, best quality, alley, night"
+
+
+def test_sequential_drops_duplicate_count_tag_from_scene():
+    result, _ = emit_sequential(
+        compiled(scene_tags=("2girls", "rain"), subjects=("girl", "girl")), PRESET, {}
+    )
+    assert result.count("2girls") == 1
+
+
+def test_sequential_position_tags_disabled_by_preset():
+    preset = TargetPreset(id="p", name="P", position_tags=False)
+    result, _ = emit_sequential(
+        compiled(
+            characters=(
+                char("c1", ["a"], hint="left", cx=0.3),
+                char("c2", ["b"], hint="right", cx=0.7),
+            )
+        ),
+        preset,
+        {},
+    )
+    assert "on the left" not in result
+
+
+def test_sequential_underscore_to_space_can_be_off():
+    preset = TargetPreset(id="p", name="P", underscore_to_space=False)
+    result, _ = emit_sequential(
+        compiled(scene_tags=(), characters=(char("c1", ["silver_hair"]),)), preset, {}
+    )
+    assert "silver_hair" in result
+
+
+def test_sequential_natural_language_drop_and_append():
+    drop = TargetPreset(id="d", name="D", natural_language="drop")
+    append = TargetPreset(id="a", name="A", natural_language="append")
+    data = compiled(scene_tags=("alley",), nl="A quiet rainy night.")
+    assert "quiet rainy night" not in emit_sequential(data, drop, {})[0]
+    assert emit_sequential(data, append, {})[0].endswith("A quiet rainy night.")
+
+
+def test_sequential_quality_suffix_goes_last():
+    preset = TargetPreset(id="p", name="P", quality_suffix=("hires",))
+    result, _ = emit_sequential(compiled(scene_tags=("alley",)), preset, {})
+    assert result.endswith("hires")
+
+
+def test_sequential_lora_tag_first_trigger_in_block():
+    entry = LoraEntry(id="kafka", file="kafka.safetensors", weight=0.8, triggers=("kafka",))
+    result, _ = emit_sequential(
+        compiled(
+            scene_tags=("alley",),
+            characters=(char("c1", ["purple_hair"]), char("c2", ["black_hair"])),
+        ),
+        PRESET,
+        {"c1": entry},
+    )
+    assert result.startswith("<lora:kafka:0.8>, masterpiece")
+    assert "kafka, purple hair" in result
+
+
+def test_sequential_lora_filename_underscores_survive():
+    """<lora:...> 태그는 언더스코어 치환에서 제외된다 — 안 그러면 파일을 못 찾는다."""
+    entry = LoraEntry(id="k", file="kafka_illustrious.safetensors", weight=0.8)
+    result, _ = emit_sequential(
+        compiled(scene_tags=(), characters=(char("c1", ["purple_hair"]),)),
+        PRESET,
+        {"c1": entry},
+    )
+    assert "<lora:kafka_illustrious:0.8>" in result
+    assert "purple hair" in result
+
+
+def test_sequential_returns_negative_too():
+    _, negative = emit_sequential(compiled(negative="bad hands"), PRESET, {})
+    assert negative == "lowres, worst quality, bad hands"

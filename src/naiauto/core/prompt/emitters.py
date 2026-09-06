@@ -17,7 +17,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from naiauto.core.prompt.formatter import COUNT_TAG_RE, count_tag  # noqa: F401
+from naiauto.core.prompt.formatter import COUNT_TAG_RE, count_tag
 from naiauto.core.prompt.merge import merge_negatives
 from naiauto.core.prompt.schema import CharacterPrompt, CompiledPrompt, RelationshipPrompt
 from naiauto.core.prompt.targets import LoraEntry, TargetPreset
@@ -31,6 +31,7 @@ __all__ = [
     "character_regions",
     "lora_tags",
     "negative_prompt",
+    "emit_sequential",
 ]
 
 #: position_hint의 수평 토큰 → 태그. "center"는 노이즈라 태그를 만들지 않는다.
@@ -218,3 +219,48 @@ def _finalize(tags: list[str], preset: TargetPreset) -> str:
         parts.append(tag)
     text = ", ".join(parts)
     return _SANITIZE_RE.sub(", ", text).strip().strip(",").strip()
+
+
+def _global_tags(
+    compiled: CompiledPrompt,
+    preset: TargetPreset,
+    loras: Mapping[str, LoraEntry],
+) -> list[str]:
+    """캐릭터 블록을 뺀 전역 태그: LoRA 태그 + 품질 프리픽스 + count 태그."""
+    tags = lora_tags(loras)
+    tags.extend(preset.quality_prefix)
+    count = count_tag(compiled.scene.subjects)
+    if count:
+        tags.append(count)
+    return tags
+
+
+def _trailing_tags(compiled: CompiledPrompt, preset: TargetPreset) -> list[str]:
+    """캐릭터 블록 뒤에 오는 것: 씬 태그 + 관계 태그 + camera/style + NL + 품질 서픽스."""
+    tags = _scene_tags(compiled)
+    rel_tags, _ = relationship_tags(compiled.relationships)
+    tags.extend(rel_tags)
+    tags.extend(_style_tags(compiled))
+    if preset.natural_language == "append" and compiled.scene.natural_language:
+        tags.append(compiled.scene.natural_language)
+    tags.extend(preset.quality_suffix)
+    return tags
+
+
+def emit_sequential(
+    compiled: CompiledPrompt,
+    preset: TargetPreset,
+    loras: Mapping[str, LoraEntry] | None = None,
+) -> tuple[str, str]:
+    """단일 Positive/Negative 문자열. 어떤 UI에서도 그대로 붙여넣을 수 있다.
+
+    순서: [LoRA] [품질 프리픽스] [count] [캐릭터 블록…] [씬] [관계] [camera/style]
+    [NL?] [품질 서픽스].
+    """
+    loras = loras or {}
+    tags = _global_tags(compiled, preset, loras)
+    total = len(compiled.characters)
+    for char in compiled.characters:
+        tags.extend(_character_block(char, total, preset, loras, with_position=True))
+    tags.extend(_trailing_tags(compiled, preset))
+    return _finalize(tags, preset), negative_prompt(compiled, preset)
