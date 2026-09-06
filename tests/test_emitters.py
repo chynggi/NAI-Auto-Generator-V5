@@ -6,6 +6,7 @@ from naiauto.core.prompt.emitters import (
     _finalize,
     character_regions,
     emit_couple_mask,
+    emit_regional_json,
     emit_sequential,
     lora_tags,
     negative_prompt,
@@ -469,3 +470,118 @@ def test_couple_mask_three_way_coordinates():
         "COUPLE MASK(0.333 0.667, 0 1)",
         "COUPLE MASK(0.667 1, 0 1)",
     ]
+
+
+# --- emit_regional_json ----------------------------------------------------
+
+
+def test_regional_json_shape():
+    data = emit_regional_json(
+        compiled(
+            scene_tags=("rain", "night"),
+            subjects=("girl", "girl"),
+            characters=(
+                char("c1", ["purple_hair"], cx=0.30, cy=0.5),
+                char("c2", ["silver_hair"], cx=0.70, cy=0.5),
+            ),
+            target="demo",
+        ),
+        PRESET,
+        {},
+    )
+    assert data["target"] == "demo"
+    assert data["global"] == {
+        "positive": "masterpiece, best quality, 2girls, rain, night",
+        "negative": "lowres, worst quality",
+    }
+    assert data["regions"] == [
+        {
+            "id": "c1",
+            "positive": "purple hair",
+            "negative": "",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.5,
+            "height": 1.0,
+            "center_x": 0.30,
+            "center_y": 0.5,
+        },
+        {
+            "id": "c2",
+            "positive": "silver hair",
+            "negative": "",
+            "x": 0.5,
+            "y": 0.0,
+            "width": 0.5,
+            "height": 1.0,
+            "center_x": 0.70,
+            "center_y": 0.5,
+        },
+    ]
+
+
+def test_regional_json_global_has_no_character_tags():
+    data = emit_regional_json(
+        compiled(scene_tags=("alley",), characters=(char("c1", ["silver_hair"], cx=0.3),)),
+        PRESET,
+        {},
+    )
+    assert "silver hair" not in data["global"]["positive"]
+
+
+def test_regional_json_no_characters_has_empty_regions():
+    data = emit_regional_json(compiled(scene_tags=("alley",)), PRESET, {})
+    assert data["regions"] == []
+
+
+def test_regional_json_sorts_regions_by_center_x():
+    data = emit_regional_json(
+        compiled(characters=(char("c1", ["a"], cx=0.85), char("c2", ["b"], cx=0.15))),
+        PRESET,
+        {},
+    )
+    assert [r["id"] for r in data["regions"]] == ["c2", "c1"]
+
+
+def test_regional_json_missing_center_is_null():
+    data = emit_regional_json(compiled(characters=(char("c1", ["a"]),)), PRESET, {})
+    assert data["regions"][0]["center_x"] is None
+    assert data["regions"][0]["center_y"] is None
+
+
+def test_regional_json_character_negative_is_carried():
+    data = emit_regional_json(
+        compiled(characters=(char("c1", ["a"], cx=0.5, negative=("blurry",)),)), PRESET, {}
+    )
+    assert data["regions"][0]["negative"] == "blurry"
+
+
+def test_regional_json_lora_is_separate_key_not_merged_into_positive():
+    entry = LoraEntry(id="kafka", file="kafka.safetensors", weight=0.8, triggers=("kafka",))
+    data = emit_regional_json(
+        compiled(characters=(char("c1", ["purple_hair"], cx=0.5),)), PRESET, {"c1": entry}
+    )
+    region = data["regions"][0]
+    assert region["lora"] == {
+        "file": "kafka.safetensors",
+        "weight": 0.8,
+        "triggers": ["kafka"],
+    }
+    assert "kafka" not in region["positive"]
+    assert "<lora:" not in data["global"]["positive"]
+
+
+def test_regional_json_omits_lora_key_when_unassigned():
+    data = emit_regional_json(compiled(characters=(char("c1", ["a"], cx=0.5),)), PRESET, {})
+    assert "lora" not in data["regions"][0]
+
+
+def test_regional_json_is_json_serialisable():
+    """소비자가 그대로 직렬화할 수 있어야 한다 — 튜플/dataclass가 새어나가면 안 된다."""
+    import json
+
+    entry = LoraEntry(id="k", file="k.safetensors", weight=0.8, triggers=("k",))
+    data = emit_regional_json(
+        compiled(characters=(char("c1", ["a"], cx=0.5),)), PRESET, {"c1": entry}
+    )
+    assert json.loads(json.dumps(data)) == data

@@ -33,6 +33,7 @@ __all__ = [
     "negative_prompt",
     "emit_sequential",
     "emit_couple_mask",
+    "emit_regional_json",
 ]
 
 #: position_hint의 수평 토큰 → 태그. "center"는 노이즈라 태그를 만들지 않는다.
@@ -320,3 +321,49 @@ def emit_couple_mask(
         )
         lines.append(f"COUPLE {mask} {_finalize(block, preset)}")
     return "\n".join(lines), negative
+
+
+def emit_regional_json(
+    compiled: CompiledPrompt,
+    preset: TargetPreset,
+    loras: Mapping[str, LoraEntry] | None = None,
+) -> dict:
+    """구조화 영역 출력 — 좌표는 0..1 정규화 (해상도 곱셈은 소비자 몫).
+
+    LoRA는 ``positive``에 합치지 않고 ``lora`` 키로 분리해 둔다 — 소비하는
+    쪽이 LoraLoader 노드로 결선할지 텍스트 태그로 넘길지 고를 수 있어야 한다.
+    전역 프롬프트에도 ``<lora:...>`` 태그를 넣지 않는 이유가 같다.
+    """
+    loras = loras or {}
+    global_tags = _global_tags(compiled, preset, {})  # LoRA 태그 제외
+    global_tags.extend(_trailing_tags(compiled, preset))
+    regions: list[dict] = []
+    for region in character_regions(compiled.characters):
+        char = region.character
+        entry = loras.get(char.id)
+        item: dict = {
+            "id": char.id,
+            "positive": _finalize([ref.tag for ref in char.tags], preset),
+            "negative": _finalize(list(char.negative_tags), preset),
+            "x": round(region.x, 4),
+            "y": round(region.y, 4),
+            "width": round(region.width, 4),
+            "height": round(region.height, 4),
+            "center_x": char.center_x,
+            "center_y": char.center_y,
+        }
+        if entry is not None:
+            item["lora"] = {
+                "file": entry.file,
+                "weight": entry.weight,
+                "triggers": list(entry.triggers),
+            }
+        regions.append(item)
+    return {
+        "target": compiled.target,
+        "global": {
+            "positive": _finalize(global_tags, preset),
+            "negative": negative_prompt(compiled, preset),
+        },
+        "regions": regions,
+    }
