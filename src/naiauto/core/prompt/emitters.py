@@ -1,0 +1,204 @@
+"""CompiledPrompt → 출력 대상별 프롬프트 방출기(emitter).
+
+NovelAI는 캐릭터별 프롬프트가 분리되지만 로컬 SDXL은 단일 프롬프트다.
+같은 ``CompiledPrompt``에서 세 가지 출력을 만든다:
+
+- ``emit_sequential``   — 단일 Positive/Negative. 어디서나 동작한다
+- ``emit_couple_mask``  — ``COUPLE MASK(...)`` (asagi4/comfyui-prompt-control)
+- ``emit_regional_json``— 구조화 JSON (좌표 0..1 정규화)
+
+모두 ``CompiledPrompt``만 읽는 순수 함수다 — I/O도, Qt 의존성도 없다.
+프리셋 로딩은 ``targets``가 맡는다.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from naiauto.core.prompt.formatter import COUNT_TAG_RE, count_tag  # noqa: F401
+from naiauto.core.prompt.merge import merge_negatives
+from naiauto.core.prompt.schema import CharacterPrompt, CompiledPrompt, RelationshipPrompt
+from naiauto.core.prompt.targets import LoraEntry, TargetPreset
+
+__all__ = [
+    "POSITION_TAGS",
+    "MUTUAL_RELATION_TAGS",
+    "CharacterRegion",
+    "split_phrase",
+    "relationship_tags",
+    "character_regions",
+    "lora_tags",
+    "negative_prompt",
+]
+
+#: position_hint의 수평 토큰 → 태그. "center"는 노이즈라 태그를 만들지 않는다.
+POSITION_TAGS: dict[str, str] = {
+    "far_left": "on the far left",
+    "left": "on the left",
+    "right": "on the right",
+    "far_right": "on the far right",
+}
+
+#: 상호(mutual) 관계 → Danbooru 실존 태그. 단방향 관계는 단일 프롬프트로
+#: 표현할 수단이 없어 드롭한다 (경고를 남긴다).
+MUTUAL_RELATION_TAGS: dict[str, str] = {
+    "holding_hands": "holding hands",
+    "hugging": "hug",
+    "looking_at": "eye contact",
+    "facing": "facing another",
+}
+
+#: 중복 쉼표/공백 정리 ("tag ,, tag" → "tag, tag").
+#: formatter._sanitize와 같은 규칙이지만 그쪽은 비공개 메서드라 여기 따로 둔다.
+_SANITIZE_RE = re.compile(r"\s*,\s*")
+
+#: position_hint에서 수평 토큰만 골라내기 위한 세로 토큰 목록.
+_VERTICAL_TOKENS = ("top", "bottom", "center")
+
+
+@dataclass(frozen=True)
+class CharacterRegion:
+    """캐릭터 1명이 차지하는 정규화 영역 (0..1)."""
+
+    character: CharacterPrompt
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+def split_phrase(text: str) -> list[str]:
+    """쉼표로 쪼개 공백을 다듬고 빈 조각을 버린다.
+
+    LLM이 camera를 "low angle shot, from below"처럼 문장으로 줄 때 태그화한다.
+    """
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def relationship_tags(
+    relationships: tuple[RelationshipPrompt, ...],
+) -> tuple[list[str], list[str]]:
+    """(태그 목록, 경고 목록). 상호 관계 중 매핑된 것만 태그가 된다."""
+    tags: list[str] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for rel in relationships:
+        tag = MUTUAL_RELATION_TAGS.get(rel.action) if rel.mutual else None
+        if tag is None:
+            warnings.append(
+                f"relationship {rel.source}->{rel.target} ({rel.action}) has no local "
+                "tag equivalent and was dropped"
+            )
+            continue
+        if tag not in seen:
+            seen.add(tag)
+            tags.append(tag)
+    return tags, warnings
+
+
+def character_regions(characters: tuple[CharacterPrompt, ...]) -> list[CharacterRegion]:
+    """캐릭터를 center_x 순으로 정렬해 가로 균등 분할 영역을 만든다.
+
+    center_x가 없으면 0.5로 보고, 같은 값끼리는 원래 순서를 유지한다.
+    """
+    if not characters:
+        return []
+    ordered = sorted(
+        enumerate(characters),
+        key=lambda pair: (0.5 if pair[1].center_x is None else pair[1].center_x, pair[0]),
+    )
+    total = len(ordered)
+    width = 1.0 / total
+    return [
+        CharacterRegion(character=char, x=index * width, y=0.0, width=width, height=1.0)
+        for index, (_, char) in enumerate(ordered)
+    ]
+
+
+def lora_tags(loras: Mapping[str, LoraEntry]) -> list[str]:
+    """캐릭터별 LoRA 배정 → ``<lora:stem:weight>`` 목록 (파일 기준 중복 제거)."""
+    tags: list[str] = []
+    seen: set[str] = set()
+    for entry in loras.values():
+        if entry.file in seen:
+            continue
+        seen.add(entry.file)
+        tags.append(f"<lora:{entry.stem}:{entry.weight:g}>")
+    return tags
+
+
+def negative_prompt(compiled: CompiledPrompt, preset: TargetPreset) -> str:
+    """프리셋 기본 네거티브 + 씬 네거티브 + 전 캐릭터 네거티브 (순서 유지 중복 제거)."""
+    parts = [", ".join(preset.default_negative), compiled.negative_prompt]
+    parts.extend(", ".join(char.negative_tags) for char in compiled.characters)
+    merged = ""
+    for part in parts:
+        merged = merge_negatives(merged, part)
+    return merged
+
+
+def _position_tag(char: CharacterPrompt, total: int, preset: TargetPreset) -> str:
+    """캐릭터의 위치 태그. 1인이거나 프리셋이 끄면 "" (혼자인데 위치 태그는 구도만 망친다)."""
+    if total < 2 or not preset.position_tags:
+        return ""
+    for token in char.position_hint.split():
+        if token in _VERTICAL_TOKENS:
+            continue
+        tag = POSITION_TAGS.get(token)
+        if tag:
+            return tag
+    return ""
+
+
+def _character_block(
+    char: CharacterPrompt,
+    total: int,
+    preset: TargetPreset,
+    loras: Mapping[str, LoraEntry],
+    *,
+    with_position: bool,
+) -> list[str]:
+    """캐릭터 1명의 태그 조각: [위치 태그] + [LoRA 트리거] + 캐릭터 태그."""
+    block: list[str] = []
+    if with_position:
+        position = _position_tag(char, total, preset)
+        if position:
+            block.append(position)
+    entry = loras.get(char.id)
+    if entry is not None:
+        block.extend(entry.triggers)
+    block.extend(ref.tag for ref in char.tags)
+    return block
+
+
+def _scene_tags(compiled: CompiledPrompt) -> list[str]:
+    """씬 태그 — count 태그는 따로 넣으므로 여기서 제외한다."""
+    return [ref.tag for ref in compiled.scene.tags if not COUNT_TAG_RE.match(ref.tag)]
+
+
+def _style_tags(compiled: CompiledPrompt) -> list[str]:
+    """camera/composition/style을 태그화한 목록."""
+    scene = compiled.scene
+    tags: list[str] = []
+    for text in (scene.camera, scene.composition, scene.style):
+        tags.extend(split_phrase(text))
+    return tags
+
+
+def _finalize(tags: list[str], preset: TargetPreset) -> str:
+    """태그 목록 → 최종 문자열 (언더스코어 치환 + 중복 쉼표 정리).
+
+    ``<lora:...>`` 태그는 치환에서 제외한다 — 파일명의 언더스코어를 공백으로
+    바꾸면 LoRA를 못 찾는다 (``kafka_illustrious`` → ``kafka illustrious``).
+    """
+    parts: list[str] = []
+    for tag in tags:
+        if not tag:
+            continue
+        if preset.underscore_to_space and not tag.startswith("<lora:"):
+            tag = tag.replace("_", " ")
+        parts.append(tag)
+    text = ", ".join(parts)
+    return _SANITIZE_RE.sub(", ", text).strip().strip(",").strip()
