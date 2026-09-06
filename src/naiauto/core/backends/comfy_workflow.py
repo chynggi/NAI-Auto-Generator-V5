@@ -211,7 +211,9 @@ def find_workflow(
 _LORA_TAG_RE = re.compile(r"<lora:[^>]*>")
 
 #: 태그를 뺀 자리에 남는 쉼표/공백 정리.
-_TIDY_RE = re.compile(r"\s*,\s*")
+#: `+`가 핵심이다 — 쉼표를 하나만 소비하면 "a, <lora>, b"가 "a, , b"로 남는다.
+#: 태그가 프롬프트 중간에 오거나 여러 개 겹치는 건 흔한 사용 패턴이다.
+_TIDY_RE = re.compile(r"(?:\s*,\s*)+")
 
 
 @dataclass(frozen=True)

@@ -22,11 +22,12 @@ MINIMAL = {
     "model_slots": {
         "checkpoint": {"path": "4.ckpt_name", "from": "CheckpointLoaderSimple.ckpt_name"}
     },
-    "slots": {"positive": "6.text", "seed": "3.seed"},
+    "slots": {"positive": "6.text", "negative": "7.text", "seed": "3.seed"},
     "graph": {
         "3": {"inputs": {"seed": 0, "model": ["4", 0]}, "class_type": "KSampler"},
-        "4": {"inputs": {"ckpt_name": ""}, "class_type": "CheckpointLoaderSimple"},
+        "4": {"inputs": {"ckpt_name": "default.safetensors"}, "class_type": "CheckpointLoaderSimple"},
         "6": {"inputs": {"text": "", "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "7": {"inputs": {"text": "", "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
         "9": {"inputs": {"images": ["8", 0]}, "class_type": "PreviewImage"},
     },
 }
@@ -186,7 +187,7 @@ def test_build_graph_skips_empty_model_selection():
     """모델을 아직 안 고른 슬롯은 템플릿 기본값을 남긴다."""
     t = _template()
     g = build_graph(t, values={}, models={"checkpoint": ""})
-    assert g["4"]["inputs"]["ckpt_name"] == ""
+    assert g["4"]["inputs"]["ckpt_name"] == "default.safetensors"
 
 
 # --- LoRA ------------------------------------------------------------------
@@ -237,8 +238,11 @@ def test_direct_mode_chains_multiple_loras():
         LoraAssignment(file="b.safetensors", weight=0.5),
     )
     g = build_graph(t, values={}, models={}, loras=loras)
-    loaders = [n for n in g.values() if n["class_type"] == "LoraLoader"]
-    assert len(loaders) == 2
+    chain = [i for i, n in g.items() if n["class_type"] == "LoraLoader"]
+    assert len(chain) == 2
+    first, second = sorted(chain, key=int)
+    assert g[second]["inputs"]["model"] == [first, 0]
+    assert g[second]["inputs"]["clip"] == [first, 1]
 
 
 def test_delegate_mode_leaves_prompt_and_graph_alone():
@@ -333,3 +337,33 @@ def test_turbo_loader_keeps_reading_the_unet():
     assert len(chain) == 1
     assert graph[chain[0]]["inputs"]["model"] == ["13", 0]
     assert graph["3"]["inputs"]["model"] == [chain[0], 0]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("masterpiece, <lora:a:1>, 1girl", "masterpiece, 1girl"),
+        ("<lora:a:1>, <lora:b:1>, 1girl", "1girl"),
+        ("masterpiece, <lora:a:1>, <lora:b:1>, 1girl", "masterpiece, 1girl"),
+        ("1girl, <lora:a:1>", "1girl"),
+        ("<lora:a:1>", ""),
+        ("<lora:a:1><lora:b:1>1girl", "1girl"),
+        ("1girl, solo", "1girl, solo"),
+        ("", ""),
+    ],
+)
+def test_strip_lora_tags_leaves_no_empty_comma_slots(text, expected):
+    """태그가 중간이나 복수로 오면 "a, , b"가 남던 버그의 회귀 테스트."""
+    assert strip_lora_tags(text) == expected
+
+
+def test_direct_mode_strips_lora_tags_from_negative_too():
+    """네거티브에도 <lora:...>가 섞일 수 있다 — 똑같이 걷어내야 한다."""
+    t = _template()
+    g = build_graph(
+        t,
+        values={"positive": "<lora:a:1>, 1girl", "negative": "<lora:b:1>, worst quality"},
+        models={},
+        loras=(LoraAssignment(file="a.safetensors", weight=0.8),),
+    )
+    assert g["7"]["inputs"]["text"] == "worst quality"
