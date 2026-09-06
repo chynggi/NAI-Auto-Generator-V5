@@ -393,10 +393,6 @@ class MainWindow(QMainWindow):
         self.accounts_action = self.file_menu.addAction("")
         self.accounts_action.setShortcut("Ctrl+Shift+I")
         self.accounts_action.triggered.connect(self._on_open_accounts)
-        self.file_menu.addSeparator()
-        self.image_info_action = self.file_menu.addAction("")
-        self.image_info_action.triggered.connect(self._on_open_image_info)
-
         # 설정 파일 저장/불러오기 (V4의 Ctrl+S). V4는 불러오기가 Ctrl+L이었지만
         # V5에서 Ctrl+L은 로그 보기라 Ctrl+O를 쓴다.
         self.file_menu.addSeparator()
@@ -458,8 +454,13 @@ class MainWindow(QMainWindow):
         self.gallery_action.setShortcut("F3")
         self.gallery_action.triggered.connect(self._on_open_gallery)
 
-        # 도구 — 로그 보기 (강제 종료처럼 재현이 어려운 문제를 사후에 확인)
+        # 도구 — 이미지 정보 / 로그 보기 (강제 종료처럼 재현이 어려운 문제를 사후에 확인)
         self.tools_menu = self.menuBar().addMenu("")
+        # 이미지에서 설정을 되가져오는 창. 파일 메뉴가 아니라 도구에 둔다.
+        self.image_info_action = self.tools_menu.addAction("")
+        self.image_info_action.triggered.connect(self._on_open_image_info)
+
+        self.tools_menu.addSeparator()
         self.log_action = self.tools_menu.addAction("")
         self.log_action.setShortcut("Ctrl+L")
         self.log_action.triggered.connect(self.open_logs)
