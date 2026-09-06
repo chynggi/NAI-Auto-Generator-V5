@@ -16,8 +16,10 @@ Qt 의존성 없음.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,12 +30,15 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "LORA_MODES",
+    "LoraAssignment",
     "ModelSlot",
     "WorkflowTemplate",
+    "build_graph",
     "builtin_workflows_dir",
     "parse_template",
     "load_workflows",
     "find_workflow",
+    "strip_lora_tags",
 ]
 
 #: ``lora_mode`` 유효값.
@@ -198,3 +203,128 @@ def find_workflow(
         if template.id == template_id:
             return template
     return None
+
+
+#: 프롬프트에서 걷어낼 <lora:name:weight> 태그.
+#: 파일명에 괄호가 들어갈 수 있어(hans_anima-kei_(blue_archive)_lora) ">"가 아닌
+#: 모든 문자를 받는다.
+_LORA_TAG_RE = re.compile(r"<lora:[^>]*>")
+
+#: 태그를 뺀 자리에 남는 쉼표/공백 정리.
+_TIDY_RE = re.compile(r"\s*,\s*")
+
+
+@dataclass(frozen=True)
+class LoraAssignment:
+    """그래프에 결선할 LoRA 하나."""
+
+    file: str
+    weight: float = 1.0
+
+
+def strip_lora_tags(text: str) -> str:
+    """프롬프트에서 ``<lora:...>``를 빼고 남은 쉼표를 정리한다.
+
+    기본 ComfyUI의 ``CLIPTextEncode``는 이 문법을 파싱하지 않고 그냥 문자열로
+    인코딩한다 — 남겨 두면 결과를 오염시킨다.
+    """
+    cleaned = _LORA_TAG_RE.sub("", text)
+    cleaned = _TIDY_RE.sub(", ", cleaned)
+    return cleaned.strip().strip(",").strip()
+
+
+def _next_node_id(graph: dict) -> str:
+    """그래프에서 쓰이지 않은 숫자 노드 id."""
+    used = {int(k) for k in graph if str(k).isdigit()}
+    return str(max(used, default=0) + 1)
+
+
+def _insert_lora_chain(
+    graph: dict, template: WorkflowTemplate, loras: tuple[LoraAssignment, ...]
+) -> None:
+    """모델/CLIP 소비자들 앞에 ``LoraLoader`` 체인을 끼워 넣는다.
+
+    체크포인트(또는 UNET) 출력을 받던 노드들이 대신 체인 끝을 받도록 재결선한다.
+    ``delegate`` 모드에서는 부르지 않는다 — 확장이 같은 일을 하므로 두 번 걸린다.
+    """
+    if not loras:
+        return
+    # 체인의 시작점: 지금 model/clip을 내보내는 링크를 찾는다.
+    model_src = None
+    clip_src = None
+    for node in graph.values():
+        inputs = node.get("inputs", {})
+        if model_src is None and isinstance(inputs.get("model"), list):
+            model_src = list(inputs["model"])
+        if clip_src is None and isinstance(inputs.get("clip"), list):
+            clip_src = list(inputs["clip"])
+    if model_src is None or clip_src is None:
+        logger.warning(
+            "%s: cannot find model/clip links to splice LoRA into, skipping", template.id
+        )
+        return
+
+    for lora in loras:
+        node_id = _next_node_id(graph)
+        graph[node_id] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": lora.file,
+                "strength_model": lora.weight,
+                "strength_clip": lora.weight,
+                "model": model_src,
+                "clip": clip_src,
+            },
+        }
+        model_src = [node_id, 0]
+        clip_src = [node_id, 1]
+
+    # 체인 뒤로 재결선 — 방금 만든 로더 자신은 건드리지 않는다.
+    for node in graph.values():
+        if node.get("class_type") == "LoraLoader":
+            continue
+        inputs = node.get("inputs", {})
+        if isinstance(inputs.get("model"), list):
+            inputs["model"] = list(model_src)
+        if isinstance(inputs.get("clip"), list):
+            inputs["clip"] = list(clip_src)
+
+
+def build_graph(
+    template: WorkflowTemplate,
+    *,
+    values: dict | None = None,
+    models: dict[str, str] | None = None,
+    loras: tuple[LoraAssignment, ...] = (),
+) -> dict:
+    """템플릿 + 값 → 큐에 넣을 그래프 (깊은 복사본).
+
+    템플릿은 앱 수명 내내 재사용되므로 **원본을 절대 건드리지 않는다.**
+    선언되지 않은 슬롯과 None/빈 값은 조용히 건너뛴다 — 템플릿마다 슬롯이 달라
+    호출자가 전부를 알 수 없다.
+    """
+    values = values or {}
+    models = models or {}
+    graph = copy.deepcopy(template.graph)
+
+    prompt_values = dict(values)
+    if template.lora_mode == "direct":
+        for key in ("positive", "negative"):
+            if isinstance(prompt_values.get(key), str):
+                prompt_values[key] = strip_lora_tags(prompt_values[key])
+        _insert_lora_chain(graph, template, loras)
+
+    for name, path in template.slots.items():
+        if name not in prompt_values or prompt_values[name] is None:
+            continue
+        node_id, input_name = _split_path(path, f"{template.id}.slots.{name}")
+        graph[node_id]["inputs"][input_name] = prompt_values[name]
+
+    for name, slot in template.model_slots.items():
+        chosen = models.get(name, "")
+        if not chosen:
+            continue
+        node_id, input_name = _split_path(slot.path, f"{template.id}.model_slots.{name}")
+        graph[node_id]["inputs"][input_name] = chosen
+
+    return graph
