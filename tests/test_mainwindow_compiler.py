@@ -39,6 +39,8 @@ class _StubClient:
 
 class _StubService:
     is_running = False
+    def set_backend(self, backend):
+        pass
     def stop(self):
         pass
     def set_live_resolution(self, *a):
@@ -135,3 +137,45 @@ def test_no_result_before_compile_hidden_buttons(qapp):
     # 호출돼도 안전해야 한다 (결과 없음 → 아무것도 안 함 정도의 가드): Apply 전
     # `_compiler_dialog`가 None이어도 크래시 없음.
     assert getattr(win, "_compiler_dialog", None) is None
+
+
+# ── 로컬 백엔드 (스펙 §6) ─────────────────────────────────
+
+def _dismiss_messageboxes():
+    """다음에 뜨는 QMessageBox를 자동으로 닫는다 — 모달이 테스트를 막지 않게."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication.instance()
+
+    def _close():
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, QMessageBox):
+                widget.close()
+
+    QTimer.singleShot(0, _close)
+
+
+def test_couple_mask_blocked_on_non_delegating_workflow(qapp):
+    """스펙 §3.6 — COUPLE MASK를 direct 템플릿에 보내면 생성 전에 막는다.
+
+    확장이 없으면 좌표 문법이 그대로 문자열로 인코딩돼 에러 없이 결과만 망가진다
+    — 사용자가 원인을 못 찾으므로 경고 후 생성을 거부한다.
+    """
+    win = _window(qapp)
+    win._settings.generation_backend = "comfyui"
+    win._settings.comfyui.template_id = "sdxl_basic"  # lora_mode=direct
+    win.prompt_edit.setPlainText("1girl, COUPLE MASK(0.5|0.5), cafe")
+    _dismiss_messageboxes()
+    with pytest.raises(ValueError):
+        win.build_job(count=1)
+
+
+def test_couple_mask_allowed_on_delegating_workflow(qapp):
+    """delegate 템플릿(sdxl_regional)은 확장이 좌표를 처리한다 — 통과."""
+    win = _window(qapp)
+    win._settings.generation_backend = "comfyui"
+    win._settings.comfyui.template_id = "sdxl_regional"  # lora_mode=delegate
+    win.prompt_edit.setPlainText("1girl, COUPLE MASK(0.5|0.5), cafe")
+    job = win.build_job(count=1)
+    assert job is not None

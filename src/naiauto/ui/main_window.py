@@ -50,6 +50,9 @@ from ..core.api.client import NAIClient
 from ..core.api.model_specs import MODEL_REGISTRY, ModelSpec, get_spec
 from ..core.api.models import CharacterCaption, GenerationRequest
 from ..core.api.subscription import OpusUsage
+from ..core.backends.comfy_objects import ObjectInfo, parse_object_info
+from ..core.backends.comfy_workflow import find_workflow, load_workflows
+from ..core.backends.comfyui import ComfyUIBackend
 from ..core.credit_estimator import CreditEstimator
 from ..core.enhance import apply_enhance, build_enhance_provider, unusable_sources
 from ..core.i18n.manager import I18nManager
@@ -202,6 +205,9 @@ class MainWindow(QMainWindow):
         #: F9로 입력 패널을 접기 직전의 스플리터 폭 — 다시 누르면 여기로 되돌린다.
         self._wide_splitter_sizes: list[int] | None = None
 
+        #: 로컬 백엔드일 때 서버가 알려준 노드·선택지 (연결 확인/옵션 페이지 경유).
+        self._comfy_object_info: ObjectInfo | None = None
+
         #: 마지막으로 연 컴파일러 다이얼로그 (적용 결과 요약에서 _compiled를 읽는다).
         self._compiler_dialog: PromptCompilerDialog | None = None
 
@@ -303,6 +309,14 @@ class MainWindow(QMainWindow):
         seed_row.addWidget(self.seed_edit)
         seed_row.addWidget(self.seed_random_check)
 
+        # ── 백엔드 (NovelAI | 로컬 ComfyUI) ───────────────
+        self.backend_label = QLabel()
+        self.backend_combo = QComboBox()
+        # 항목 문구는 retranslate에서 채운다 — data는 여기서 정한다.
+        self.backend_combo.addItem("novelai", "novelai")
+        self.backend_combo.addItem("comfyui", "comfyui")
+        self.backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+
         self.sampler_label = QLabel()
         self.scheduler_label = QLabel()
         self.steps_label = QLabel()
@@ -310,6 +324,7 @@ class MainWindow(QMainWindow):
         self.rescale_label = QLabel()
         self.seed_label = QLabel()
         self.uc_preset_label = QLabel()
+        form.addRow(self.backend_label, self.backend_combo)
         form.addRow(self.sampler_label, self.sampler_combo)
         form.addRow(self.scheduler_label, self.scheduler_combo)
         form.addRow(self.steps_label, self.steps_spin)
@@ -1215,15 +1230,7 @@ class MainWindow(QMainWindow):
 
     def _on_model_changed(self) -> None:
         spec = self.current_spec()
-        for combo, values in (
-            (self.sampler_combo, spec.samplers),
-            (self.scheduler_combo, spec.schedulers),
-        ):
-            current = combo.currentText()
-            combo.clear()
-            combo.addItems(list(values))
-            if current in values:
-                combo.setCurrentText(current)
+        self._refresh_sampler_lists()
         self._rebuild_resolution_catalog()
         self.uc_preset_combo.clear()
         for preset_key in spec.uc_presets:
@@ -1248,6 +1255,116 @@ class MainWindow(QMainWindow):
         self.steps_spin.setValue(int(defaults.get("steps", 28)))
         self.cfg_spin.setValue(float(defaults.get("cfg_scale", 5.0)))
         self.rescale_spin.setValue(float(defaults.get("cfg_rescale", 0.0)))
+
+    # ── 백엔드 전환 (NovelAI | 로컬 ComfyUI) ─────────────
+
+    def _on_backend_changed(self) -> None:
+        self._select_backend(self.backend_combo.currentData())
+
+    def _select_backend(self, backend_id: str) -> None:
+        """백엔드를 전환한다 (novelai | comfyui).
+
+        생성 중에는 서비스가 교체를 거부한다 — 콤보를 되돌리고 안내한다. 여기서
+        조용히 넘어가면 사용자는 바꿨다고 믿는다.
+        """
+        index = self.backend_combo.findData(backend_id)
+        if index >= 0:
+            self.backend_combo.blockSignals(True)
+            self.backend_combo.setCurrentIndex(index)
+            self.backend_combo.blockSignals(False)
+        self._settings.generation_backend = backend_id
+        try:
+            if backend_id == "comfyui":
+                self._service.set_backend(self._build_comfy_backend())
+            else:
+                self._service.set_backend(self._client)
+        except RuntimeError:
+            previous = "novelai" if backend_id == "comfyui" else "comfyui"
+            previous_index = self.backend_combo.findData(previous)
+            self.backend_combo.blockSignals(True)
+            self.backend_combo.setCurrentIndex(previous_index if previous_index >= 0 else 0)
+            self.backend_combo.blockSignals(False)
+            self._settings.generation_backend = previous
+            self.statusBar().showMessage(
+                self._i18n.get_text("errors.generation_error"), 5000
+            )
+            return
+        # 로컬 백엔드에는 Anlas/크레딧 개념이 없다 — 게이지들을 숨긴다.
+        is_novelai = backend_id == "novelai"
+        self.anlas_label.setVisible(is_novelai)
+        self.usage_label.setVisible(is_novelai)
+        self.usage_bar.setVisible(is_novelai)
+        self._credit_gauge.setVisible(is_novelai)
+        self._refresh_sampler_lists()
+
+    def _build_comfy_backend(self) -> ComfyUIBackend:
+        """설정에서 로컬 백엔드를 만든다.
+
+        템플릿을 못 찾으면 ``template=None``으로 둔다 — 백엔드가 생성 시점에
+        같은 오류(``errors.comfy_no_template``)를 낸다.
+        """
+        comfy = self._settings.comfyui
+        template = self._comfy_template()
+        if template is None:
+            self.statusBar().showMessage(
+                self._i18n.get_text("errors.comfy_no_template"), 5000
+            )
+        return ComfyUIBackend(
+            base_url=comfy.base_url,
+            template=template,
+            model_slots=comfy.model_slots.get(comfy.template_id, {}),
+            timeout=comfy.timeout_seconds,
+        )
+
+    def _comfy_template(self):
+        """설정의 template_id에 해당하는 템플릿. 못 찾으면 None."""
+        try:
+            templates = load_workflows(self._settings.comfyui.workflows_dir)
+        except OSError:
+            return None
+        return find_workflow(templates, self._settings.comfyui.template_id)
+
+    def _apply_backend_object_info(self, raw: object) -> None:
+        """``/object_info`` 응답을 파싱해 보관한다 (샘플러·스케줄러 목록의 원천).
+
+        연결 확인(옵션 페이지), 그리고 이 창을 여는 쪽이 서버 목록을 알게 되면
+        호출해 준다. 백엔드가 novelai면 무시된다.
+        """
+        self._comfy_object_info = parse_object_info(raw)
+        if self._settings.generation_backend == "comfyui":
+            self._refresh_sampler_lists()
+
+    def _refresh_sampler_lists(self) -> None:
+        """백엔드에 맞는 샘플러·스케줄러 목록을 콤보에 채운다.
+
+        novelai → 현재 모델 스펙, comfyui → 서버가 알려준 목록. 목록이 비어
+        있으면 콤보를 비우지 않는다 — 서버가 꺼져 있을 때 선택이 날아가면 안 된다.
+        """
+        if self._settings.generation_backend != "comfyui":
+            spec = self.current_spec()
+            for combo, values in (
+                (self.sampler_combo, spec.samplers),
+                (self.scheduler_combo, spec.schedulers),
+            ):
+                current = combo.currentText()
+                combo.clear()
+                combo.addItems(list(values))
+                if current in values:
+                    combo.setCurrentText(current)
+            return
+        info = self._comfy_object_info
+        for combo, path in (
+            (self.sampler_combo, "KSampler.sampler_name"),
+            (self.scheduler_combo, "KSampler.scheduler"),
+        ):
+            values = info.options(path) if info is not None else ()
+            if not values:
+                continue
+            current = combo.currentText()
+            combo.clear()
+            combo.addItems(values)
+            if current in values:
+                combo.setCurrentText(current)
 
     # ── 설정 적용/수집 ────────────────────────────────────
 
@@ -1286,6 +1403,7 @@ class MainWindow(QMainWindow):
         self._sync_position_aspect()
         self._apply_section_states()  # Req 12.2
         self._refresh_section_summaries()  # Req 11.6, 11.8
+        self._select_backend(self._settings.generation_backend)
 
     def _apply_prompt_font(self) -> None:
         """설정된 폰트 크기·색상을 프롬프트·네거티브·캐릭터 프롬프트 입력란에 적용한다.
@@ -1424,6 +1542,8 @@ class MainWindow(QMainWindow):
         self._rebuild_resolution_catalog()  # Req 5.9, 5.10
         self._apply_section_states()  # Req 6.4 (섹션 접힘 상태 초기화)
         self._refresh_section_summaries()
+        # 옵션에서 주소·템플릿·모델 슬롯을 바꿨을 수 있다 — 백엔드를 다시 만든다.
+        self._select_backend(s.generation_backend)
 
     # ── 접이식 섹션 (요약 / 접힘 상태) ──────────────────────
 
@@ -1697,6 +1817,18 @@ class MainWindow(QMainWindow):
         preset_uc = spec.uc_presets.get(uc_key, "")
         user_uc = self.negative_edit.toPlainText().strip()
         negative = ", ".join(part for part in (preset_uc, user_uc) if part)
+
+        # 스펙 §3.6 안전망: COUPLE MASK 좌표 문법을 확장 없는 템플릿에 보내면
+        # 그대로 문자열로 인코딩돼 에러 없이 결과만 망가진다 — 생성 전에 막는다.
+        if (
+            self._settings.generation_backend == "comfyui"
+            and "COUPLE MASK(" in prompt
+        ):
+            template = self._comfy_template()
+            if template is not None and template.lora_mode != "delegate":
+                tr = self._i18n.get_text
+                QMessageBox.warning(self, tr("errors.title"), tr("errors.comfy_coupling_unsupported"))
+                raise ValueError("COUPLE MASK requires a delegating workflow")
 
         # i2i/인페인팅은 원본 이미지 크기를 그대로 쓴다 (스모크로 검증된 동작)
         size = self.target_size()
@@ -2205,6 +2337,10 @@ class MainWindow(QMainWindow):
             pass  # isValid 확인과 emit 사이에 닫힌 경우
 
     def refresh_anlas(self) -> None:
+        """보유 Anlas를 표시한다. 로컬 백엔드에는 get_anlas가 없어 건너뛴다."""
+        if self._settings.generation_backend != "novelai":
+            return
+
         def fetch() -> None:
             try:
                 result = self._client.get_anlas()
@@ -2278,6 +2414,9 @@ class MainWindow(QMainWindow):
         self.ai_section.retranslate()
         self.compiler_open_button.setText(tr("compiler.open_dialog"))
         self.compiler_section.retranslate()
+        self.backend_label.setText(tr("ui.backend"))
+        for index, key in enumerate(("ui.backend_novelai", "ui.backend_comfyui")):
+            self.backend_combo.setItemText(index, tr(key))
         self.sampler_label.setText(tr("image_options.sampler"))
         self.scheduler_label.setText(tr("advanced.noise_schedule"))
         self.steps_label.setText(tr("image_options.steps"))

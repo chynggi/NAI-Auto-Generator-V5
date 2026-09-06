@@ -136,6 +136,23 @@ class GenerationService:
         engine.load()
         self._artist_combos = engine
 
+    # ── 백엔드 ─────────────────────────────────────────────
+
+    @property
+    def backend(self) -> ImageBackend:
+        """현재 생성 백엔드."""
+        return self._client
+
+    def set_backend(self, backend: ImageBackend) -> None:
+        """백엔드를 갈아 끼운다. 생성 중에는 거부한다.
+
+        진행 중인 잡이 요청을 보낸 서버와 결과를 회수할 서버가 달라지면
+        이미지가 사라진다.
+        """
+        if self._running:
+            raise RuntimeError("cannot swap backend while a job is running")
+        self._client = backend
+
     # ── 제어 ──────────────────────────────────────────────
 
     @property
