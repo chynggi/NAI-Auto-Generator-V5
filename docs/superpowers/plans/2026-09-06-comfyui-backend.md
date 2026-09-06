@@ -1556,9 +1556,20 @@ def test_execution_error():
 
 
 def test_other_prompt_ids_are_ignored():
-    """여러 클라이언트가 붙어 있을 수 있다 — 남의 작업 메시지를 먹으면 안 된다."""
+    """여러 클라이언트가 붙어 있을 수 있다 — 남의 작업 메시지를 먹으면 안 된다.
+
+    output을 비우면 안 된다 — 필터를 꺼도 "이미지 없음"으로 None이 나와
+    테스트가 엉뚱한 이유로 통과한다 (실제로 그랬다).
+    """
     raw = json.dumps(
-        {"type": "executed", "data": {"node": "9", "prompt_id": "other", "output": {}}}
+        {
+            "type": "executed",
+            "data": {
+                "node": "9",
+                "prompt_id": "other",
+                "output": {"images": [{"filename": "x.png", "subfolder": "", "type": "temp"}]},
+            },
+        }
     )
     assert parse_message(raw, PID) is None
 

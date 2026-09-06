@@ -97,6 +97,7 @@ analysis = Analysis(
         "diskcache",
         "jinja2",
         "typing_extensions",
+        "websocket",
     ],
     hookspath=[],
     runtime_hooks=[],
