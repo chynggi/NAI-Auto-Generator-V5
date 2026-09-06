@@ -134,7 +134,8 @@ def test_supports_credit_defaults_true_for_legacy_client():
 def test_real_nai_client_is_a_backend():
     from naiauto.core.api.client import NAIClient
 
-    assert issubclass(NAIClient, ImageBackend) or isinstance.__self__ is not None
+    # ImageBackend는 메서드만 가진 Protocol이라 issubclass가 쓸 수 있다.
+    assert issubclass(NAIClient, ImageBackend)
     assert backend_supports_credit(NAIClient.__new__(NAIClient)) is True
 ```
 
