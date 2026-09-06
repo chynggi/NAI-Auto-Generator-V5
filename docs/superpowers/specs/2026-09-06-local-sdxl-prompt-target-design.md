@@ -378,7 +378,9 @@ COUPLE MASK(0.5 1, 0 1) silver hair, short hair, school uniform
 - **"적용" 시 캐릭터 프롬프트 탭은 건드리지 않는다** (기존 사용자 입력 보존).
   `CompilerApplyPayload.characters`가 비어 있으므로 main_window가 캐릭터 탭을
   비우지 않도록 확인이 필요하다.
-- 입력 히스토리(`InputHistoryEntry`)에 `target`과 LoRA 선택을 함께 저장하고 복원한다.
+- 입력 히스토리(`InputHistoryEntry`)에 **`target`만** 저장하고 복원한다.
+  LoRA 선택은 넣지 않는다 — 레지스트리가 바뀌면 복원이 어긋나고, 선택은 컴파일
+  *결과*의 캐릭터에 붙는 것이라 *입력* 스냅숏의 성격이 아니다.
 
 ### 6.2 설정
 
@@ -395,11 +397,13 @@ target_presets_dir: str = ""     # 빈 값 = 내장 프리셋만
 새 페이지는 만들지 않는다.
 
 - 기본 타깃 선택 콤보
-- 선택된 프리셋의 `quality_prefix` / `default_negative`를 텍스트로 직접 편집
-  → 편집하면 같은 `id`의 **사용자 프리셋 파일로 저장**된다 (내장은 불변)
 - 프리셋 폴더 경로 선택 (`loras.json`도 이 폴더에서 읽는다)
-- LoRA 레지스트리 상태 표시 (`loras.json` 없음 / N개 로드됨). 편집은 하지 않는다 —
-  파일을 직접 고치게 하고, 폴더 열기 버튼만 둔다.
+- LoRA 레지스트리 상태 표시 (`loras.json` 없음 / N개 로드됨)
+
+**프리셋 내용 편집은 넣지 않는다** (2026-09-06 계획 수립 중 결정). 앱이 사용자
+프리셋 파일을 써 넣는 경로를 만들면 내장/사용자 병합 규칙과 얽히고, 편집 UI
+하나를 위해 저장 로직이 통째로 필요해진다. 프리셋도 `loras.json`과 같은 방침으로
+간다 — **폴더를 열어 파일을 직접 고치게 하고, 앱은 로드 상태만 보여 준다.**
 
 ### 6.4 i18n
 
@@ -427,7 +431,7 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 | `emit_sequential` 결과가 빈 문자열 | 기존 `CompilerEmptyResultError` |
 | `loras.json` 없음 | LoRA 기능 비활성 (조용히). 다이얼로그의 LoRA UI 숨김 |
 | `loras.json` 파싱 실패 / 항목 스키마 위반 | 해당 항목만 건너뛰고 로그 경고. 파일 전체가 깨졌으면 빈 레지스트리로 폴백 |
-| 선택된 LoRA id가 레지스트리에 없음 (히스토리 복원 등) | 해당 캐릭터의 LoRA를 "없음"으로 되돌리고 `warnings`에 1줄 |
+| 선택된 LoRA id가 레지스트리에 없음 | 그 캐릭터의 LoRA를 조용히 건너뛴다. LoRA 선택은 히스토리에 저장하지 않으므로(§6.1) 세션 중 레지스트리 파일이 바뀐 경우에만 생긴다 |
 | `couple_mask` 요청인데 캐릭터 0~1명 | 정상 — `COUPLE` 라인 없이 글로벌 라인만 |
 
 ## 8. 테스트
@@ -459,8 +463,8 @@ WD14 태거 / LM Studio 태거 / 이미지 변형)가 들어왔다. **컴파일�
 - `tests/test_compiler.py` — `target`/`loras`/`resolution` 인자 전달,
   `flatten`에 따른 emitter 선택, `modify`의 보존 토큰이 로컬 타깃에서도 유지될 것
 - `tests/test_compiler_dialog.py` — 타깃 전환 시 미리보기 전환, 탭 3개 렌더,
-  적용 시 캐릭터 탭 미변경, 히스토리의 `target`·LoRA 선택 복원,
-  `loras.json` 없을 때 LoRA UI 숨김, 캐릭터 수 변경 시 id 기준 선택 유지
+  적용 시 캐릭터 탭 미변경, 히스토리의 `target` 복원,
+  `loras.json` 없을 때 LoRA UI 숨김, 재컴파일 시 id 기준 선택 유지
 - `tests/test_settings_compiler.py` — `default_target`/`target_presets_dir` 왕복 저장
 
 ## 9. 변경 파일
