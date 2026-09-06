@@ -56,6 +56,24 @@ ACTION_PHRASES: dict[str, str] = {
 _SANITIZE_RE = re.compile(r"\s*,\s*")
 
 
+def count_tag(subjects: tuple[str, ...]) -> str:
+    """subjects가 모두 같고 ``SUBJECT_PLURALS``에 있으면 count 태그, 아니면 "".
+
+    n>=2면 "{n}{복수형}"("2girls"), n==1이면 "1girl".
+    ``emitters``와 ``PromptFormatter`` 양쪽이 쓴다.
+    """
+    if not subjects:
+        return ""
+    first = subjects[0]
+    if first not in SUBJECT_PLURALS:
+        return ""
+    if any(s != first for s in subjects):
+        return ""
+    if len(subjects) >= 2:
+        return f"{len(subjects)}{SUBJECT_PLURALS[first]}"
+    return f"{len(subjects)}{first}"
+
+
 class PromptFormatter:
     """구조화 프롬프트 → NovelAI V5 문자열.
 
@@ -91,18 +109,8 @@ class PromptFormatter:
         return self._sanitize(base), self._sanitize(negative)
 
     def count_tag(self, subjects: tuple[str, ...]) -> str:
-        """subjects가 모두 같고 단수형 SUBJECT_PLURALS에 있으면 "{n}{plural}" (n>=2) /
-        "1girl" 등 (n==1). 그 외엔 ""."""
-        if not subjects:
-            return ""
-        first = subjects[0]
-        if first not in SUBJECT_PLURALS:
-            return ""
-        if any(s != first for s in subjects):
-            return ""
-        if len(subjects) >= 2:
-            return f"{len(subjects)}{SUBJECT_PLURALS[first]}"
-        return f"{len(subjects)}{first}"
+        """모듈 함수 ``count_tag``에 위임한다 (하위 호환용 메서드)."""
+        return count_tag(subjects)
 
     def relationship_sentences(
         self, relationships: tuple[RelationshipPrompt, ...], characters: tuple[CharacterPrompt, ...]
@@ -277,4 +285,4 @@ class PromptFormatter:
         return _SANITIZE_RE.sub(", ", text).strip()
 
 
-__all__ = ["SUBJECT_PLURALS", "COUNT_TAG_RE", "ACTION_PHRASES", "PromptFormatter"]
+__all__ = ["SUBJECT_PLURALS", "COUNT_TAG_RE", "ACTION_PHRASES", "count_tag", "PromptFormatter"]
