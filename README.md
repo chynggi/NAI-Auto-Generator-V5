@@ -55,6 +55,7 @@ NovelAI Diffusion **V5** 이미지 생성을 자동화하는 데스크톱 앱입
 - **🔔 새 버전 확인** — 릴리스가 올라오면 앱이 알려 줍니다 (자동 확인은 끌 수 있음)
 - **💬 자연어 프롬프트 컴파일러** — 장면을 자연어로 설명하면 Scene/Character/Relationship으로 분해하고 내장 태그 DB로 검증 (도구 → 자연어 프롬프트 컴파일러, Ctrl+Shift+P)
 - **로컬 SDXL 출력** — 컴파일 결과를 NovelAI 형식 대신 Illustrious·NoobAI·Animagine 등 로컬 SDXL 모델용 단일 Positive/Negative로 뽑는다. ComfyUI 영역 분할용 `COUPLE MASK` 문자열과 좌표 JSON도 함께 준다.
+- **🖥 로컬 ComfyUI 백엔드** — NovelAI 대신 로컬 ComfyUI 서버로 생성한다. 옵션 → 로컬 생성에서 주소·워크플로·모델을 고르고 메인 창에서 백엔드를 전환. 컴파일러의 로컬 SDXL 출력과 짝을 이룬다.
 
 ### 🤖 자연어 프롬프트 컴파일러 (Natural Language Prompt Compiler)
 
@@ -64,6 +65,18 @@ NovelAI Diffusion **V5** 이미지 생성을 자동화하는 데스크톱 앱입
 - 내장 Danbooru 태그 DB로 태그 검증 — 존재하지 않는 태그는 최종 프롬프트에서 제외
 - 변환 결과를 미리 보고 Apply/Insert/Replace로 기존 편집기에 반영
 - 캐릭터 위치(왼쪽/오른쪽)는 캐릭터 위치 캔버스에 자동 반영
+
+### 🖥 로컬 ComfyUI 백엔드
+
+NovelAI 대신 로컬 ComfyUI 서버로 생성한다. 컴파일러의 로컬 SDXL 출력과 짝을
+이룬다 — 뽑은 프롬프트를 그대로 로컬에서 생성한다.
+
+- 옵션 → **로컬 생성**에서 주소 입력 → **연결 확인** → 워크플로 선택 → 모델 슬롯 선택
+- 메인 창의 백엔드 콤보를 `ComfyUI (로컬)`로 전환 (샘플러 목록이 서버 기준으로 바뀜)
+- 내장 워크플로 3종: `sdxl_basic`, `sdxl_regional`(comfyui-prompt-control 확장 필요,
+  `COUPLE MASK` 지원), `anima`(터보 steps 8 / cfg 1, 미터보 30 / 4)
+- 로컬 백엔드에서는 Anlas 표시와 크레딧 측정이 꺼진다
+- 자세한 내용은 [MANUAL_KR.md](MANUAL_KR.md) → 로컬 생성 (ComfyUI)
 
 ### LLM Provider 설정 (옵션 → AI 프롬프트)
 | 설정 | 값 |
